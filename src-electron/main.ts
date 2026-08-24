@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
@@ -738,31 +738,43 @@ ipcMain.handle("updater:openRepo", async () => {
   await shell.openExternal(GITHUB_URL);
   return { ok: true };
 });
+function runCmd(cmd: string, args: string[], timeoutMs = 120000): Promise<{ code: number; out: string; err: string }> {
+  return new Promise((resolve) => {
+    const p = spawn(cmd, args);
+    let out = "", err = "";
+    const t = setTimeout(() => { try { p.kill("SIGKILL"); } catch {} }, timeoutMs);
+    p.stdout?.on("data", (d) => (out += d.toString()));
+    p.stderr?.on("data", (d) => (err += d.toString()));
+    p.on("close", (code) => { clearTimeout(t); resolve({ code: code ?? 1, out, err }); });
+    p.on("error", (e) => { clearTimeout(t); resolve({ code: 1, out: "", err: String(e) }); });
+  });
+}
+
+async function downloadFile(url: string, dest: string): Promise<void> {
+  const { Readable } = await import("node:stream");
+  const { pipeline } = await import("node:stream/promises");
+  const { createWriteStream } = await import("node:fs");
+  const res = await fetch(url, { headers: { "User-Agent": "MeteorIDE-Updater" }, redirect: "follow", signal: AbortSignal.timeout(600000) });
+  if (!res.ok || !res.body) throw new Error(`Download failed HTTP ${res.status}`);
+  await pipeline(Readable.fromWeb(res.body as unknown as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(dest));
+}
+
+ipcMain.handle("app:restart", () => {
+  app.relaunch();
+  app.exit(0);
+  return { ok: true };
+});
+
 ipcMain.handle("updater:install", async () => {
+  const status = lastUpdateCheck && lastUpdateCheck.hasUpdate ? lastUpdateCheck : await checkForUpdates(false);
+  if (!status.hasUpdate) return { ok: false, error: "Already up to date" };
+
+  // ── 1) dev/git checkout: pull source + rebuild in place ──
   const appDir = path.resolve(__dirname, "..", "..");
-  const isGit = existsSync(path.join(appDir, ".git"));
-  if (isGit) {
-    // try git pull
-    const { spawn } = await import("node:child_process");
-    const pull: { code: number; out: string; err: string } = await new Promise(resolve => {
-      const p = spawn("git", ["pull", "--ff-only"], { cwd: appDir });
-      let out = "", err = "";
-      p.stdout.on("data", d => out += d.toString());
-      p.stderr.on("data", d => err += d.toString());
-      p.on("close", code => resolve({ code: code ?? 1, out, err }));
-      p.on("error", e => resolve({ code: 1, out: "", err: String(e) }));
-    });
+  if (existsSync(path.join(appDir, ".git"))) {
+    const pull = await runCmd("git", ["pull", "--ff-only"], 120000);
     if (pull.code === 0) {
-      // rebuild
-      const build: { code: number; out: string; err: string } = await new Promise(resolve => {
-        const p = spawn("npm", ["run", "build"], { cwd: appDir, shell: true });
-        let out = "", err = "";
-        p.stdout.on("data", d => out += d.toString());
-        p.stderr.on("data", d => err += d.toString());
-        p.on("close", code => resolve({ code: code ?? 1, out, err }));
-        p.on("error", e => resolve({ code: 1, out: "", err: String(e) }));
-      });
-      // save seen commit
+      const build = await runCmd(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], 300000);
       try {
         const gh = await fetchGitHubLatest();
         const { writeFileSync, mkdirSync } = await import("node:fs");
@@ -774,22 +786,64 @@ ipcMain.handle("updater:install", async () => {
       } catch {}
       return { ok: build.code === 0, output: pull.out + "\n" + build.out, error: build.err || pull.err, needsRestart: true, method: "git" };
     }
-    // git pull failed, fallback to opening repo
-    await shell.openExternal(GITHUB_URL);
-    return { ok: false, output: pull.out, error: pull.err || "git pull failed, opened GitHub", method: "git", fallbackOpened: true };
+    // fall through to packaged auto-update if git pull fails
   }
-  // not a git repo: open releases and save seen
-  await shell.openExternal(GITHUB_URL + "/releases");
+
+  // ── 2) packaged app: download the release asset and self-update ──
   try {
-    const gh = await fetchGitHubLatest();
-    const { writeFileSync, mkdirSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const { homedir } = await import("node:os");
-    const cfgDir = process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "meteor") : join(homedir(), ".config", "meteor");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(join(cfgDir, "last-seen-commit"), gh.sha);
-  } catch {}
-  return { ok: true, method: "open", needsRestart: false };
+    const headers: Record<string, string> = { "User-Agent": "MeteorIDE-Updater", Accept: "application/vnd.github+json" };
+    const r = await fetch(GITHUB_API_RELEASE, { headers, signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw new Error(`Release lookup failed HTTP ${r.status}`);
+    const rel = await r.json() as { assets?: Array<{ name: string; browser_download_url: string }> };
+    const assets = rel.assets ?? [];
+    const isMac = process.platform === "darwin";
+    const isWin = process.platform === "win32";
+    const asset = isWin
+      ? assets.find(a => /\.exe$/i.test(a.name))
+      : isMac
+        ? (assets.find(a => /\.dmg$/i.test(a.name) && a.name.toLowerCase().includes(process.arch === "arm64" ? "arm64" : "x64"))
+          || assets.find(a => /\.dmg$/i.test(a.name)))
+        : undefined;
+    if (!asset) throw new Error(`No ${isWin ? ".exe" : ".dmg"} asset found in latest release`);
+
+    const dlPath = path.join(app.getPath("temp"), asset.name.replace(/\s+/g, "_"));
+
+    if (isMac) {
+      await downloadFile(asset.browser_download_url, dlPath);
+      // clean stale mountpoint best-effort
+      await runCmd("hdiutil", ["detach", "-quiet", "/Volumes/MeteorUpdate"], 10000).catch(() => undefined);
+      const mount = await runCmd("hdiutil", ["attach", "-nobrowse", "-quiet", "-mountpoint", "/Volumes/MeteorUpdate", dlPath], 120000);
+      if (mount.code !== 0) throw new Error("Failed to mount DMG: " + (mount.err || mount.out).slice(0, 200));
+      try {
+        const srcApp = "/Volumes/MeteorUpdate/Meteor.app";
+        if (!existsSync(srcApp)) throw new Error("Meteor.app not found inside DMG");
+        // overwrite the running bundle (running process keeps old inode until restart)
+        const exe = app.getPath("exe");
+        const m = /^(.*\.app)\//.exec(exe);
+        const destApp = m ? m[1] : "/Applications/Meteor.app";
+        const cp = await runCmd("ditto", [srcApp, destApp], 600000);
+        if (cp.code !== 0) throw new Error("Failed to copy Meteor.app: " + (cp.err || cp.out).slice(0, 200));
+      } finally {
+        await runCmd("hdiutil", ["detach", "-quiet", "/Volumes/MeteorUpdate"], 30000);
+        try { rmSync(dlPath, { force: true }); } catch {}
+      }
+      return { ok: true, needsRestart: true, method: "auto-dmg", output: `Installed ${status.latestVersion} — restart to apply` };
+    }
+
+    if (isWin) {
+      await downloadFile(asset.browser_download_url, dlPath);
+      const child = spawn(dlPath, ["/S"], { detached: true, stdio: "ignore", shell: false });
+      child.unref();
+      setTimeout(() => app.exit(0), 2000); // let silent installer take over
+      return { ok: true, needsRestart: false, method: "auto-exe", output: "Silent installer launched — app will close" };
+    }
+
+    throw new Error("Auto-update not supported on this platform");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    try { await shell.openExternal(GITHUB_URL + "/releases"); } catch {}
+    return { ok: false, error: msg, fallbackOpened: true };
+  }
 });
 
 // auto-check on startup (delay 5s) and every 30min

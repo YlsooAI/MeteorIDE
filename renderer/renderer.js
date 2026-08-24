@@ -3351,9 +3351,12 @@ function initUpdater(){
     try{
       const res = await window.meteorAPI.updater.install();
       if (res?.needsRestart){
-        banner.innerHTML = `<span style="color:var(--green);display:inline-flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Updated — restart to apply</span><span class="spacer"></span><button onclick="location.reload()" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--text);cursor:pointer">Restart</button>`;
+        banner.innerHTML = `<span style="color:var(--green);display:inline-flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> ${esc(res.output || "Updated — restart to apply")}</span><span class="spacer"></span><button id="update-restart-btn" class="btn-primary" style="font-size:11px;padding:5px 14px">Restart now</button>`;
+        document.getElementById("update-restart-btn")?.addEventListener("click", async ()=>{ try{ await window.meteorAPI.updater.restart(); }catch{ location.reload(); } });
+      } else if (res?.method === "auto-exe"){
+        banner.innerHTML = `<span style="color:var(--green);display:inline-flex;align-items:center;gap:6px">Installing update… app will close</span>`;
       } else if (res?.fallbackOpened){
-        banner.innerHTML = `<span>Opened GitHub — pull manually</span><span class="spacer"></span><button id="update-dismiss2" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--dim);cursor:pointer">Dismiss</button>`;
+        banner.innerHTML = `<span>Auto-update failed (${esc(res.error || "").slice(0,80)}) — opened GitHub releases</span><span class="spacer"></span><button id="update-dismiss2" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--dim);cursor:pointer">Dismiss</button>`;
         document.getElementById("update-dismiss2")?.addEventListener("click", ()=> banner.classList.add("hidden"));
       } else {
         viewBtn?.click();
