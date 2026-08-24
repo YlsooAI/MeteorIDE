@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, EMBEDDED_SUPABASE_URL, EMBEDDED_SUPABASE_ANON_KEY } from "../src/config.js";
 import { WebSocket as WS } from "ws";
 if (!(globalThis as unknown as { WebSocket?: unknown }).WebSocket) {
   (globalThis as unknown as Record<string, unknown>).WebSocket = WS as unknown;
@@ -19,8 +19,8 @@ function mockAuthFile(): string { return join(configDir(), "mock-auth.json"); }
 function getSupabaseEnv(): { url?: string; anonKey?: string } {
   const cfg = loadConfig() as { supabaseUrl?: string; supabaseAnonKey?: string };
   return {
-    url: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || cfg.supabaseUrl,
-    anonKey: process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || cfg.supabaseAnonKey,
+    url: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || cfg.supabaseUrl || EMBEDDED_SUPABASE_URL,
+    anonKey: process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || cfg.supabaseAnonKey || EMBEDDED_SUPABASE_ANON_KEY,
   };
 }
 

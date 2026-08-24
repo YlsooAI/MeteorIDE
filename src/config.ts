@@ -2,6 +2,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+// Embedded keys for distributed builds (.exe/.dmg) — users will use our keys
+export const EMBEDDED_API_KEY = "sk-qgeusPXxBRNxeblGvbMbFETpNJzZc3MFl7zO6dARiB694CwDvxDhzaXVfhN2Jx1c";
+export const EMBEDDED_SUPABASE_URL = "https://ikjugnimawkoatkbvpgk.supabase.co";
+export const EMBEDDED_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlranVnbmltYXdrb2F0a2J2cGdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNzI3OTAsImV4cCI6MjA5NTY0ODc5MH0.xr9B_khj2zKIEoUsTisL66SGgn8Yo2K0YH5YDw0QmQw";
+
 export interface McpServerConfig {
   command?: string;
   args?: string[];
@@ -68,7 +73,8 @@ export function resolveApiKey(cliKey?: string): string | undefined {
     cliKey ??
     process.env.METEOR_API_KEY ??
     process.env.OPENCODE_API_KEY ??
-    loadConfig().apiKey
+    loadConfig().apiKey ??
+    EMBEDDED_API_KEY
   );
 }
 

@@ -23,6 +23,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "electron": "^33.4.11",
+    "electron-builder": "^24.13.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },
@@ -30,5 +31,29 @@
     "@supabase/supabase-js": "^2.112.3",
     "@types/ws": "^8.18.1",
     "ws": "^8.21.3"
+  },
+  "build": {
+    "appId": "com.meteoride",
+    "productName": "Meteor",
+    "copyright": "Copyright © 2026 YlsooAI",
+    "files": [
+      "dist/**/*",
+      "bin/**/*",
+      "package.json",
+      "src-electron/preload.cjs",
+      "renderer/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg"],
+      "identity": null
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "asar": true
   }
 }

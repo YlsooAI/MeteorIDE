@@ -22,6 +22,14 @@
           Search <span class="sb-kbd">⌘ K</span>
         </button>
       </nav>
+      <div id="search-wrap" class="hidden" style="padding:0 8px 8px">
+        <div style="display:flex;align-items:center;gap:6px;background:#1e1e22;border:1px solid #2a2a30;border-radius:8px;padding:6px 8px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6a6a6e" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M16 16l4 4"/></svg>
+          <input id="chat-search" placeholder="Search chats..." style="flex:1;background:transparent;border:none;outline:none;color:#e6e8eb;font-size:12px" autocomplete="off" spellcheck="false" />
+          <button id="search-clear" class="icon-mini" style="display:none;width:18px;height:18px" title="Clear"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div id="search-count" style="font-size:11px;color:var(--dim2);padding:4px 2px;display:none"></div>
+      </div>
 
 
 

@@ -3506,10 +3506,70 @@ async function init() {
   // project pill click opens folder
   $("#cc-project")?.addEventListener("click", openWorkspace);
   $("#sb-proj-meteor")?.addEventListener("click", openWorkspace);
+  // ── Chat search (left upper corner) ──
+  let chatSearchQuery = "";
+  function applyChatSearchFilter(){
+    const q = chatSearchQuery.trim().toLowerCase();
+    const groups = document.querySelectorAll("#sb-projects .project-group");
+    let visible = 0;
+    groups.forEach(g => {
+      if (!q){ g.style.display=""; visible++; return; }
+      const row = g.querySelector(".proj-row");
+      const text = (row ? row.textContent : "") + " " + (g.textContent || "");
+      const match = text.toLowerCase().includes(q);
+      g.style.display = match ? "" : "none";
+      if (match){
+        visible++;
+        const chats = g.querySelector(".project-chats");
+        if (chats && chats.classList.contains("hidden")){ chats.classList.remove("hidden"); }
+      }
+    });
+    const countEl = document.getElementById("search-count");
+    const clearBtn = document.getElementById("search-clear");
+    if (q){
+      if (clearBtn) clearBtn.style.display = chatSearchQuery ? "inline-flex" : "none";
+      if (countEl){ countEl.style.display="block"; countEl.textContent = visible ? `${visible} match${visible===1?"":"es"}` : "No chats found"; }
+    } else {
+      if (clearBtn) clearBtn.style.display="none";
+      if (countEl) countEl.style.display="none";
+    }
+    document.querySelectorAll("#sb-projects .sb-history-row").forEach(r=>{
+      if (!q) { r.style.display=""; return; }
+      const t=(r.textContent||"").toLowerCase();
+      r.style.display = t.includes(q) ? "" : "none";
+    });
+  }
+  const searchWrap = document.getElementById("search-wrap");
+  const searchInput = document.getElementById("chat-search");
+  const searchClear = document.getElementById("search-clear");
   $("#sb-search-btn")?.addEventListener("click", () => {
-    const f = document.getElementById("filter-files");
-    if (f) { f.focus(); f.parentElement?.classList.add("focus"); }
+    if (!searchWrap || !searchInput) return;
+    const wasHidden = searchWrap.classList.contains("hidden");
+    if (wasHidden){ searchWrap.classList.remove("hidden"); searchInput.focus(); searchInput.select(); }
+    else {
+      if (chatSearchQuery){ chatSearchQuery=""; searchInput.value=""; applyChatSearchFilter(); }
+      searchWrap.classList.add("hidden");
+    }
   });
+  if (searchInput){
+    searchInput.addEventListener("input", ()=>{
+      chatSearchQuery = searchInput.value;
+      applyChatSearchFilter();
+    });
+    searchInput.addEventListener("keydown", (e)=>{
+      if (e.key==="Escape"){ e.preventDefault(); chatSearchQuery=""; searchInput.value=""; applyChatSearchFilter(); if(searchWrap) searchWrap.classList.add("hidden"); }
+      if (e.key==="Enter"){ const first = document.querySelector("#sb-projects .project-group:not([style*='display: none']) .proj-row"); if (first) first.click(); }
+    });
+  }
+  if (searchClear){
+    searchClear.addEventListener("click", ()=>{ chatSearchQuery=""; if(searchInput){ searchInput.value=""; searchInput.focus(); } applyChatSearchFilter(); });
+  }
+  window.addEventListener("keydown", (e)=>{
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase()==="k"){ e.preventDefault(); const btn=document.getElementById("sb-search-btn"); if(btn) btn.click(); }
+  });
+  window.__applyChatSearch = applyChatSearchFilter;
+  const _rp = renderProjects;
+  renderProjects = function(){ _rp(); setTimeout(applyChatSearchFilter, 0); };
   // send btn
   $("#send-btn")?.addEventListener("click", sendCurrent);
   // ── Image upload (+ button) ──
