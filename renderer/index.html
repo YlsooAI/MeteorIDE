@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob: https://ikjugnimawkoatkbvpgk.supabase.co https://*.supabase.co; connect-src 'self' https://ikjugnimawkoatkbvpgk.supabase.co https://*.supabase.co; script-src 'self'" />
+  <title>Meteor</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- ── Sidebar (ZCode style) ── -->
+    <aside id="z-sidebar">
+      <div class="sb-top" style="height:14px;min-height:14px;-webkit-app-region:drag"></div>
+
+      <nav class="sb-nav">
+        <button class="sb-item" id="btn-new-task">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 5v14M5 12h14"/><circle cx="12" cy="12" r="8" opacity=".25"/></svg>
+          New task <span class="sb-kbd">⌘ N</span>
+        </button>
+        <button class="sb-item" id="sb-search-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="7"/><path d="M16 16l4 4"/></svg>
+          Search <span class="sb-kbd">⌘ K</span>
+        </button>
+      </nav>
+
+
+
+      <div class="sb-section">
+        <div class="sb-section-head">Projects</div>
+        <div id="ws-root" class="hidden"></div>
+        <div class="sb-proj" id="sb-projects">
+          <button class="proj-row" id="sb-proj-meteor">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/><path d="M3 17l9 4 9-4"/></svg>
+            MeteorCLI
+          </button>
+          <button class="sb-history-row" data-query="make it so i can upload folder">
+            <span>make it so i can upload fold…</span><small>1d</small>
+          </button>
+          <button class="proj-row muted">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/></svg>
+            id
+          </button>
+          <button class="sb-history-row" data-query="whats this codebase about?">
+            <span>whats this codebase about?</span><small>1d</small>
+          </button>
+          <button class="proj-row muted">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/></svg>
+            yavqo-translate-…
+          </button>
+          <button class="sb-history-row"><span>Run Dev Server</span><small>3d</small></button>
+          <button class="sb-history-row"><span>run the dev server</span><small>3d</small></button>
+          <!-- Hidden real tree injected here -->
+          <div id="tree" class="real-tree"></div>
+          <div id="git-panel" class="sb-git">
+            <header class="pane-header small git-head" style="display:none">
+              <span class="pane-title">Git</span>
+              <span id="git-status" class="git-status">—</span>
+              <span class="spacer"></span>
+              <button id="git-refresh" class="btn-icon small" title="Refresh" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 01-2.12 3.13 9 9 0 01-6.37 2.64 9 9 0 01-6.37-2.64A9 9 0 013 12a9 9 0 012.64-6.37A9 9 0 0112 3a9 9 0 016.37 2.64"/></svg></button>
+            </header>
+            <div id="git-stat" class="git-stat"></div>
+            <div id="git-file-list" class="git-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sb-section">
+        <div class="sb-section-head">Tasks</div>
+        <div class="sb-empty">No tasks yet</div>
+        <div id="sb-tasks"></div>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="sb-footer">
+        <div class="user-row">
+          <span id="auth-avatar" class="avatar">
+            <img id="auth-avatar-img" class="hidden" alt="avatar" />
+            <span id="auth-avatar-fallback">•</span>
+          </span>
+          <div style="display:flex;flex-direction:column;min-width:0;line-height:1.2;flex:1">
+            <span id="auth-user-name" class="user-name">Not signed in</span>
+            <div style="display:flex;align-items:center;gap:4px;min-width:0">
+              <span id="auth-user-email" style="font-size:10px;color:var(--dim2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:108px;flex:1">••••••••</span>
+              <button id="toggle-email" class="icon-mini" title="Show email" style="width:18px;height:18px;flex-shrink:0;display:none">
+                <svg class="eye-open" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="eye-closed hidden" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17.94 17.94A10.94 10.94 0 0112 19C5 19 1 12 1 12a20.3 20.3 0 015.06-6.94"/><path d="M9.53 9.53A3 3 0 0012 15a3 3 0 002.47-1.47"/><path d="M14.12 14.12L9.88 9.88"/><path d="M1 1l22 22"/></svg>
+              </button>
+            </div>
+          </div>
+          <span class="spacer"></span>
+          <button id="key-dot" class="dot dot-off" title="API key status"></button>
+          <button id="theme-toggle" class="icon-mini" title="Toggle theme" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg></button>
+          <button id="settings-btn" class="icon-mini" title="Settings" style="display:inline-flex"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 009 15a1.65 1.65 0 001-1.51V13a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82-.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 009 9a1.65 1.65 0 001-1.51V7a2 2 0 014 0v.09a1.65 1.65 0 001 1.51z"/></svg></button>
+          <button id="auth-logout" class="icon-mini hidden" title="Sign out" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+        </div>
+        <!-- hidden filter input for JS compat -->
+        <div style="display:none"><input id="filter-files" placeholder="Filter files" /></div>
+      </div>
+    </aside>
+
+    <!-- ── Main stage ── -->
+    <main id="stage">
+      <header id="stage-header">
+        <div class="stage-header-right">
+          <button id="editor-toggle" class="icon-mini term-toggle-btn" title="Toggle editor (⌘E)" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg></button>
+          <button id="term-toggle" class="icon-mini term-toggle-btn" title="Toggle terminal (⌘J)" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="8 10 12 14 8 18"/><line x1="14" y1="18" x2="20" y2="18"/></svg></button>
+        </div>
+      </header>
+
+      <div id="update-banner" class="hidden" style="display:flex;align-items:center;gap:10px;margin:8px 12px 0;padding:10px 12px;background:linear-gradient(90deg, rgba(255,106,42,.12), rgba(255,106,42,.06));border:1px solid rgba(255,106,42,.22);border-radius:10px;color:var(--text);font-size:12px">
+        <span style="display:inline-flex;color:var(--accent)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/><line x1="12" y1="9" x2="12" y2="21"/></svg></span>
+        <span id="update-text" style="flex:1">Update available — <span id="update-version" style="font-weight:700"></span></span>
+        <button id="update-view" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--dim);cursor:pointer">View</button>
+        <button id="update-install" class="btn-primary" style="font-size:11px;padding:6px 14px">Update</button>
+        <button id="update-dismiss" class="icon-mini" title="Dismiss" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+      </div>
+
+      <!-- geometric background -->
+      <div id="geo-bg" aria-hidden="true">
+        <svg width="900" height="420" viewBox="0 0 900 420" fill="none">
+          <path d="M 120 40 L 420 40 C 440 40 460 55 470 75 L 520 150" stroke="rgba(255,255,255,.08)" stroke-width="1" fill="none"/>
+          <path d="M 140 55 L 415 55 C 435 55 452 68 462 88" stroke="rgba(255,255,255,.06)" stroke-width="1" fill="none"/>
+          <path d="M 420 120 L 720 420" stroke="rgba(255,255,255,.09)" stroke-width="1" fill="none"/>
+        </svg>
+      </div>
+
+      <div id="center-stage">
+        <h1 id="greeting">Evening, nice work today</h1>
+
+        <div id="composer-card">
+          <div class="cc-context">
+            <button id="cc-project" class="cc-proj-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/></svg>
+              <span id="cc-project-name">MeteorCLI</span> <span class="chevron" style="display:inline-flex;vertical-align:middle"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></span>
+            </button>
+          </div>
+          <div class="cc-input-wrap">
+            <textarea id="input" rows="1" placeholder="Ask Meteor anything, @ to add context, / for commands or capabilities"></textarea>
+          </div>
+          <div id="image-preview" class="img-preview hidden"></div>
+          <input id="image-input" type="file" accept="image/*,image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+          <div class="cc-bar">
+            <div class="cc-left">
+              <button class="cc-plus" id="btn-attach" title="Upload images" style="display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+              <div class="seg" id="mode-seg" title="Plan = preview only, Build = writes files">
+                <button class="seg-btn" data-mode="plan">Plan</button>
+                <button class="seg-btn active" data-mode="build">Build</button>
+              </div>
+              <span class="c-auto" style="display:none"><input type="checkbox" id="chk-auto" checked> auto</span>
+              <span class="cc-full" title="Access level"><span style="color:#ff6a2a;display:inline-flex;vertical-align:middle"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.4 7.2H22l-6.2 4.5 2.4 7.3L12 16.5 5.8 21l2.4-7.3L2 9.2h7.6z"/></svg></span> Full access <span class="chevron" style="display:inline-flex;vertical-align:middle"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></span></span>
+            </div>
+            <div class="cc-right">
+              <span class="dot dot-off" style="width:10px;height:10px;opacity:.5"></span>
+              <select id="model-select" title="Select model"></select>
+              <select id="reasoning-select" title="Reasoning effort">
+                <option value="">auto</option>
+                <option value="low">low</option>
+                <option value="high">high</option>
+                <option value="max">max</option>
+              </select>
+              <button id="send-btn" class="cc-send" title="Send" style="display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+            </div>
+          </div>
+        </div>
+
+        <div id="sub-banner">
+          <span class="banner-icon">📢</span>
+          <span class="banner-text">New feature for subscribers: Create "Idle-time task", We will complete your assigned task for free during periods of surplus computing power.</span>
+          <button id="banner-close" class="icon-mini" title="Dismiss" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+
+        <div id="templates">
+          <button class="tpl-card">
+            <div class="tpl-title"><span class="tpl-ico" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> Standup Git Summary</div>
+            <div class="tpl-desc">A Friday summary of what happened this week.</div>
+          </button>
+          <button class="tpl-card">
+            <div class="tpl-title"><span class="tpl-ico" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> CI Failures &amp; Flaky Test Report</div>
+            <div class="tpl-desc">A report on recent CI failures, flaky tests, and likely causes.</div>
+          </button>
+          <button class="tpl-card">
+            <div class="tpl-title"><span class="tpl-ico" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> Customize</div>
+            <div class="tpl-desc">Skip the template and tell it directly what you want to do.</div>
+          </button>
+        </div>
+      </div>
+
+      <div id="messages"></div>
+
+      <div id="composer-bottom" class="hidden"></div>
+
+      <!-- Editor + Terminal dock (kept for functionality, ZCode-style bottom dock) -->
+      <div id="dock">
+        <div id="divider"></div>
+        <section id="main">
+          <header id="main-top">
+            <div class="seg">
+              <button class="seg-btn active" title="Editor">Editor</button>
+            </div>
+            <span class="spacer"></span>
+            <button id="editor-toggle-dock" class="term-toggle-btn dock-btn" title="Toggle editor (⌘E)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+              Editor
+            </button>
+            <button id="term-toggle-dock" class="term-toggle-btn dock-btn" title="Toggle terminal (⌘J)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M12 15h5"/></svg>
+              Terminal
+            </button>
+          </header>
+          <div id="main-body">
+            <aside id="sidebar" style="display:none">
+              <header class="pane-header small">
+                <span class="pane-title">Git changes</span>
+                <span class="spacer"></span>
+                <span style="font-size:10px;color:var(--dim);display:inline-flex"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></span>
+              </header>
+              <div class="filter-wrap">
+                <span class="filter-icon">⌕</span>
+              </div>
+            </aside>
+            <div id="editor-pane">
+              <header class="pane-header small">
+                <span class="pane-title">editor</span>
+                <span id="file-name" class="file-name">untitled</span>
+                <span id="dirty-flag" class="dirty hidden" style="display:inline-flex"><svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="currentColor"/></svg></span>
+                <span class="spacer"></span>
+                <button id="btn-undo" title="Undo last write" disabled style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 8H5v4"/><path d="M5 8a7 7 0 0112 5"/></svg></button><span id="undo-count" class="undo-count"></span>
+                <button id="btn-new" title="New file">new</button>
+                <button id="btn-folder" title="Open folder">folder</button>
+                <button id="btn-open" title="Open file">open</button>
+                <button id="btn-save" title="Save">save</button>
+                <button id="editor-close" class="icon-mini" title="Hide editor (⌘E)" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+              </header>
+              <div id="tabs" class="hidden"></div>
+              <div id="editor-body">
+                <pre id="gutter"></pre>
+                <div id="editor-stack">
+                  <pre id="highlight"><code id="highlight-code"></code></pre>
+                  <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+                </div>
+              </div>
+              <footer id="editor-status">
+                <span id="lang-label">plaintext</span>
+                <span class="spacer"></span>
+                <span id="cursor-pos">1:1</span>
+              </footer>
+              <div id="empty-state">
+                <div class="empty-icon">▣</div>
+                <div class="empty-title">No file changes yet</div>
+                <div class="empty-sub">Project changes will appear here</div>
+              </div>
+            </div>
+          </div>
+          <div id="terminal-pane">
+            <header class="term-head">
+              <span class="term-tab active">Terminal 1</span>
+              <span class="spacer"></span>
+              <button id="term-close" class="icon-mini" title="Hide terminal (⌘J)" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </header>
+            <div id="term-output" class="term-body"></div>
+            <div id="term-input-wrap">
+              <span id="term-prompt" class="term-prompt">% </span>
+              <input id="term-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="" />
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- compat hidden els -->
+      <div style="display:none">
+        <span id="status-left">ready</span>
+        <span id="status-hints"></span>
+        <div id="chat-pane"></div>
+        <div id="layout"></div>
+      </div>
+    </main>
+  </div>
+
+  <footer id="statusbar" style="display:none">
+    <span id="statusbar-left">ready</span>
+  </footer>
+
+  <!-- Auth overlay (must sign in to use Meteor) -->
+  <div id="auth-overlay" class="hidden" aria-hidden="true">
+    <div id="auth-backdrop"></div>
+    <div id="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <div class="auth-head">
+        <div class="auth-logo" style="display:grid;place-items:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8"><path d="M12 2l2.4 7.2H22l-6.2 4.5 2.4 7.3L12 16.5 5.8 21l2.4-7.3L2 9.2h7.6z"/></svg></div>
+        <div>
+          <h2 id="auth-title">Welcome to Meteor</h2>
+          <p class="auth-sub">Sign in to continue — Supabase authentication required</p>
+          <div id="auth-mode-hint" class="auth-hint"></div>
+        </div>
+        <span id="auth-supabase-badge" class="c-pill hidden" style="font-size:10px"></span>
+      </div>
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-mode="signin">Sign in</button>
+        <button class="auth-tab" data-mode="signup">Create account</button>
+        <span class="spacer"></span>
+      </div>
+      <form id="auth-form" autocomplete="on" spellcheck="false">
+        <label class="mcp-field">
+          <span>Email</span>
+          <input id="auth-email" type="email" placeholder="you@example.com" required autocomplete="email" />
+        </label>
+        <label class="mcp-field">
+          <span>Password</span>
+          <input id="auth-password" type="password" placeholder="••••••••" required autocomplete="current-password" minlength="6" />
+        </label>
+        <label class="mcp-field hidden" id="auth-confirm-wrap">
+          <span>Confirm password</span>
+          <input id="auth-confirm" type="password" placeholder="••••••••" autocomplete="new-password" minlength="6" />
+        </label>
+        <div id="auth-error" class="form-error hidden"></div>
+        <div id="auth-ok" class="edit-ok hidden" style="font-size:12px"></div>
+        <div class="auth-actions">
+          <span id="auth-extra-hint" style="font-size:11px;color:var(--dim2)"></span>
+          <span class="spacer"></span>
+          <button id="auth-submit" type="submit" class="btn-primary">Sign in</button>
+        </div>
+        <p class="auth-foot">By continuing you agree to Meteor's terms. <span id="auth-switch-hint">No account? <a href="#" id="auth-switch">Create one</a></span></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Chat context menu -->
+  <div id="chat-context-menu" class="hidden" role="menu">
+    <button data-action="copy" role="menuitem" style="display:flex;align-items:center;gap:8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v3"/></svg> Copy</button>
+    <button data-action="delete" role="menuitem" style="display:flex;align-items:center;gap:8px;color:var(--red)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg> Delete chat</button>
+  </div>
+
+  <!-- Settings / MCP panel -->
+  <div id="settings-overlay" class="hidden" aria-hidden="true">
+    <div id="settings-backdrop"></div>
+    <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <header class="settings-head">
+        <div class="settings-title-wrap">
+          <span class="settings-icon" style="display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 009 15a1.65 1.65 0 001-1.51V13a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82-.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 009 9a1.65 1.65 0 001-1.51V7a2 2 0 014 0v.09a1.65 1.65 0 001 1.51z"/></svg></span>
+          <div>
+            <h2 id="settings-title">Settings</h2>
+            <p class="settings-sub">MCP servers · Model Context Protocol · JSON connect</p>
+          </div>
+        </div>
+        <div class="settings-head-actions">
+          <span id="mcp-count" class="c-pill">0 servers</span>
+          <button id="settings-close" class="btn-icon" title="Close (Esc)" style="display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+      </header>
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-tab="servers">Servers</button>
+        <button class="settings-tab" data-tab="json">JSON</button>
+        <span class="spacer"></span>
+        <span class="settings-hint">Stored in <code>~/.config/meteor/config.json</code></span>
+      </div>
+      <div id="settings-tab-servers" class="settings-body">
+        <div class="mcp-toolbar">
+          <button id="mcp-add-btn" class="btn-primary" style="display:inline-flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg> New server</button>
+          <button id="mcp-refresh-btn" title="Reload from disk" style="display:inline-flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 01-2.12 3.13 9 9 0 01-6.37 2.64 9 9 0 01-6.37-2.64A9 9 0 013 12a9 9 0 012.64-6.37A9 9 0 0112 3a9 9 0 016.37 2.64"/></svg> Reload</button>
+          <span id="mcp-status" class="mcp-inline-status"></span>
+          <span class="spacer"></span>
+          <label class="c-auto" title="Show disabled servers"><input type="checkbox" id="mcp-show-disabled" checked> show disabled</label>
+        </div>
+        <div id="mcp-list" class="mcp-list"></div>
+        <form id="mcp-form" class="mcp-form hidden" autocomplete="off" spellcheck="false">
+          <div class="mcp-form-head">
+            <h3 id="mcp-form-title">New MCP server</h3>
+            <button type="button" id="mcp-form-cancel" class="btn-icon" title="Cancel" style="display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </div>
+          <div class="mcp-form-grid">
+            <label class="mcp-field">
+              <span>Name <em>*</em></span>
+              <input id="mcp-name" placeholder="e.g. filesystem, github" required pattern="[a-zA-Z0-9_-]+" maxlength="48" />
+              <small>letters, numbers, dash, underscore</small>
+            </label>
+            <label class="mcp-field">
+              <span>Type</span>
+              <select id="mcp-type">
+                <option value="stdio">stdio — local command</option>
+                <option value="sse">sse — remote URL</option>
+                <option value="http">http — streamable HTTP</option>
+                <option value="streamable-http">streamable-http</option>
+              </select>
+            </label>
+            <label class="mcp-field mcp-field-span" id="mcp-field-command">
+              <span>Command <em>*</em></span>
+              <input id="mcp-command" placeholder="e.g. npx  or  /usr/local/bin/mcp-server" />
+            </label>
+            <label class="mcp-field mcp-field-span" id="mcp-field-args">
+              <span>Args <small>(one per line or JSON array)</small></span>
+              <textarea id="mcp-args" rows="2" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/tmp"></textarea>
+            </label>
+            <label class="mcp-field mcp-field-span hidden" id="mcp-field-url">
+              <span>URL <em>*</em></span>
+              <input id="mcp-url" placeholder="https://example.com/mcp/sse" />
+            </label>
+            <label class="mcp-field">
+              <span>Env <small>(KEY=value per line)</small></span>
+              <textarea id="mcp-env" rows="3" placeholder="GITHUB_TOKEN=ghp_xxx"></textarea>
+            </label>
+            <label class="mcp-field">
+              <span>Headers <small>(for http/sse)</small></span>
+              <textarea id="mcp-headers" rows="3" placeholder="Authorization: Bearer xxx"></textarea>
+            </label>
+            <label class="mcp-field">
+              <span>Cwd</span>
+              <input id="mcp-cwd" placeholder="/absolute/path or ~/path" />
+            </label>
+            <label class="mcp-field" style="display:flex;align-items:center;gap:8px;padding-top:18px">
+              <input type="checkbox" id="mcp-disabled" />
+              <span style="margin:0">Disabled</span>
+            </label>
+          </div>
+          <div class="mcp-form-actions">
+            <span id="mcp-form-error" class="form-error"></span>
+            <span class="spacer"></span>
+            <button type="button" id="mcp-form-delete" class="btn-deny hidden">Delete</button>
+            <button type="submit" id="mcp-form-save" class="btn-primary">Save server</button>
+          </div>
+        </form>
+        <div id="mcp-empty" class="mcp-empty hidden">
+          <div class="empty-icon" style="display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg></div>
+          <div class="empty-title">No MCP servers yet</div>
+          <div class="empty-sub">Create one with the form above or paste JSON in the <b>JSON</b> tab.</div>
+        </div>
+      </div>
+      <div id="settings-tab-json" class="settings-body hidden">
+        <div class="mcp-toolbar">
+          <span class="settings-hint">Paste full MCP JSON — click Connect to validate, save &amp; test</span>
+          <span class="spacer"></span>
+          <button id="mcp-json-format" title="Prettify">Format</button>
+          <button id="mcp-json-copy" title="Copy JSON">Copy</button>
+        </div>
+        <div class="json-editor-wrap">
+          <textarea id="mcp-json-editor" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder='{"mcpServers":{}}'></textarea>
+          <div id="mcp-json-gutter" class="hidden"></div>
+        </div>
+        <div class="mcp-form-actions" style="margin-top:10px">
+          <span id="mcp-json-error" class="form-error"></span>
+          <span id="mcp-json-ok" class="edit-ok hidden">✓ valid</span>
+          <span class="spacer"></span>
+          <button id="mcp-json-validate" type="button">Validate</button>
+          <button id="mcp-json-connect" type="button" class="btn-primary">Save &amp; Connect</button>
+        </div>
+        <div class="json-help">
+          <p><b>Connect</b> parses, validates and writes to <code>~/.config/meteor/config.json</code>.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="./renderer.js"></script>
+</body>
+</html>
