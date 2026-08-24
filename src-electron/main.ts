@@ -602,26 +602,73 @@ async function getLocalCommit(): Promise<string | null> {
   } catch { return null; }
 }
 
+// Proper semver compare: returns >0 if a newer, <0 if older, 0 if equal
+function semverCompare(a: string, b: string): number {
+  const norm = (v: string) => String(v || "").replace(/^v/i, "").trim();
+  const parts = (v: string) => norm(v).split(/[.\-+]/).map(x => /^\d+$/.test(x) ? parseInt(x, 10) : x);
+  const pa = parts(a), pb = parts(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const xa = pa[i], xb = pb[i];
+    if (xa === undefined && xb === undefined) return 0;
+    if (xa === undefined) return -1;
+    if (xb === undefined) return 1;
+    if (typeof xa === "number" && typeof xb === "number") {
+      if (xa !== xb) return xa > xb ? 1 : -1;
+    } else {
+      const sa = String(xa), sb = String(xb);
+      if (sa !== sb) return sa > sb ? 1 : -1;
+    }
+  }
+  return 0;
+}
+
+async function fetchLatestTagViaRedirect(): Promise<string | null> {
+  // github.com/.../releases/latest redirects to /releases/tag/<tag> — no API rate limit
+  try {
+    const r = await fetch(GITHUB_URL + "/releases/latest", { headers: { "User-Agent": "MeteorIDE-Updater" }, redirect: "follow", signal: AbortSignal.timeout(8000) });
+    const m = /\/releases\/tag\/([^/?#]+)/.exec(r.url || "");
+    if (m) return decodeURIComponent(m[1]);
+  } catch {}
+  return null;
+}
+
+async function fetchVersionViaJsDelivr(): Promise<string | null> {
+  // jsDelivr CDN serves the repo's package.json — works even when GitHub API is unreachable/rate-limited
+  for (const branch of ["main", "master"]) {
+    try {
+      const r = await fetch(`https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@${branch}/package.json`, { headers: { "User-Agent": "MeteorIDE-Updater" }, signal: AbortSignal.timeout(8000) });
+      if (!r.ok) continue;
+      const j = await r.json() as { version?: string };
+      if (j.version && /^\d+\.\d+/.test(j.version)) return j.version;
+    } catch {}
+  }
+  return null;
+}
+
 async function fetchGitHubLatest(): Promise<{ sha: string; message: string; date: string; url: string; releaseTag?: string; releaseUrl?: string; releaseNotes?: string }> {
   const headers: Record<string, string> = { "User-Agent": "MeteorIDE-Updater", Accept: "application/vnd.github+json" };
-  // try releases first
+  let firstError: unknown = null;
+  // 1) Releases API (gives notes too)
   try {
     const r = await fetch(GITHUB_API_RELEASE, { headers, signal: AbortSignal.timeout(8000) });
     if (r.ok) {
-      const j = await r.json() as { tag_name?: string; html_url?: string; body?: string; published_at?: string; target_commitish?: string };
+      const j = await r.json() as { tag_name?: string; html_url?: string; body?: string; published_at?: string };
       if (j.tag_name) {
-        // get commit for tag if needed, but use tag as version
         return { sha: j.tag_name, message: j.body?.slice(0, 200) || "", date: j.published_at || "", url: j.html_url || GITHUB_URL, releaseTag: j.tag_name, releaseUrl: j.html_url || GITHUB_URL, releaseNotes: j.body || "" };
       }
     }
-  } catch {}
-  // fallback to latest commit
-  const r2 = await fetch(GITHUB_API_COMMITS, { headers, signal: AbortSignal.timeout(8000) });
-  if (!r2.ok) throw new Error(`GitHub API ${r2.status} ${r2.statusText}`);
-  const commits = await r2.json() as Array<{ sha: string; commit: { message: string; committer: { date: string } }; html_url: string }>;
-  const c = commits[0];
-  if (!c) throw new Error("No commits found");
-  return { sha: c.sha, message: c.commit.message, date: c.commit.committer.date, url: c.html_url };
+  } catch (e) { firstError = e; }
+  // 2) releases/latest redirect (no API rate limit)
+  const tag = await fetchLatestTagViaRedirect();
+  if (tag) {
+    return { sha: tag, message: "", date: "", url: `${GITHUB_URL}/releases/tag/${tag}`, releaseTag: tag, releaseUrl: `${GITHUB_URL}/releases/tag/${tag}`, releaseNotes: "" };
+  }
+  // 3) jsDelivr package.json version (works even when github.com is blocked)
+  const ver = await fetchVersionViaJsDelivr();
+  if (ver) {
+    return { sha: ver, message: "", date: "", url: `${GITHUB_URL}/releases`, releaseTag: ver, releaseUrl: `${GITHUB_URL}/releases`, releaseNotes: "" };
+  }
+  throw new Error(firstError instanceof Error ? `GitHub check failed: ${firstError.message}` : "GitHub check failed");
 }
 
 async function checkForUpdates(force = false): Promise<UpdateStatus> {
@@ -631,14 +678,12 @@ async function checkForUpdates(force = false): Promise<UpdateStatus> {
     const gh = await fetchGitHubLatest();
     const latestVersion = gh.releaseTag || gh.sha.slice(0, 7);
     const latestCommit = gh.sha;
-    // compare: if we have local commit, compare SHAs; else compare versions
+    // compare: release tag (semver) wins; commit SHA only as last resort
     let hasUpdate = false;
-    if (localCommit && gh.sha && !gh.releaseTag) {
+    if (gh.releaseTag) {
+      hasUpdate = semverCompare(gh.releaseTag, currentVersion) > 0;
+    } else if (localCommit && gh.sha) {
       hasUpdate = localCommit !== gh.sha;
-    } else if (gh.releaseTag) {
-      // simple semver compare: if tag != currentVersion
-      const norm = (v: string) => v.replace(/^v/, "");
-      hasUpdate = norm(latestVersion) !== norm(currentVersion);
     } else {
       // first run: save without showing update
       const { readFileSync, existsSync, writeFileSync, mkdirSync } = await import("node:fs");

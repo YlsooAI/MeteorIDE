@@ -3323,7 +3323,11 @@ async function refreshUpdateBanner(force=false){
       if (force && recentlyDismissed){ try{ localStorage.removeItem("meteor:updateDismissed"); }catch{} }
     } else {
       banner.classList.add("hidden");
-      if (force && status && !status.hasUpdate){
+      if (force && status && status.error){
+        banner.innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px;color:var(--red)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg> Couldn't check for updates — ${esc(status.error).slice(0,120)}</span><span class="spacer"></span><button id="update-banner-retry" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--text);cursor:pointer">Retry</button>`;
+        banner.classList.remove("hidden");
+        setTimeout(()=> document.getElementById("update-banner-retry")?.addEventListener("click", async ()=>{ const b=document.getElementById("update-banner-retry"); if(b){b.textContent="Checking…";b.disabled=true;} await refreshUpdateBanner(true); }), 0);
+      } else if (force && status && !status.hasUpdate){
         banner.innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px;color:var(--dim)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> You are up to date — v${status.currentVersion} (latest ${status.latestVersion})</span><span class="spacer"></span><button id="update-banner-ok" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--dim);cursor:pointer">OK</button>`;
         banner.classList.remove("hidden");
         setTimeout(()=> document.getElementById("update-banner-ok")?.addEventListener("click", ()=> banner.classList.add("hidden")), 0);
