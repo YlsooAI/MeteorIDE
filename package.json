@@ -1,6 +1,6 @@
 {
   "name": "meteor",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Meteor — AI coding assistant (CLI + Electron app)",
   "type": "module",
   "license": "MIT",
@@ -49,13 +49,19 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": ["dmg"],
+      "icon": "src/icons/meteor.icns",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "entitlements": null,
       "entitlementsInherit": null
     },
     "win": {
-      "target": ["nsis"]
+      "target": ["nsis"],
+      "icon": "src/icons/meteor.ico"
+    },
+    "linux": {
+      "icon": "src/icons/meteor-512.png",
+      "target": ["AppImage"]
     },
     "asar": true
   }
