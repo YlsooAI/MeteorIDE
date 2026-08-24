@@ -3302,24 +3302,42 @@ async function refreshUpdateBanner(force=false){
     updateStatus = status;
     const banner = document.getElementById("update-banner");
     const versionEl = document.getElementById("update-version");
+    const footerVer = document.getElementById("update-footer-version");
+    const footerStatus = document.getElementById("update-footer-status");
+    if (footerVer && status) footerVer.textContent = `v${status.currentVersion}`;
+    if (footerStatus && status){
+      if (status.error) footerStatus.textContent = "check failed";
+      else if (status.hasUpdate) footerStatus.textContent = `update → ${status.latestVersion}`;
+      else footerStatus.textContent = "up to date";
+      footerStatus.title = status.hasUpdate ? `Update ${status.currentVersion} → ${status.latestVersion}` : `Latest ${status.latestVersion} — checked just now`;
+    }
     if (!banner || !status) return;
     const dismissed = localStorage.getItem("meteor:updateDismissed");
     const recentlyDismissed = dismissed && (Date.now() - parseInt(dismissed,10) < 1000*60*60*24);
-    if (status.hasUpdate && !recentlyDismissed){
+    const shouldShow = status.hasUpdate && (!recentlyDismissed || force);
+    if (shouldShow){
       if (versionEl) versionEl.textContent = `${status.currentVersion} → ${status.latestVersion}`;
       const textEl = document.getElementById("update-text");
       if (textEl && status.changelog) textEl.title = status.changelog.slice(0, 300);
       banner.classList.remove("hidden");
+      if (force && recentlyDismissed){ try{ localStorage.removeItem("meteor:updateDismissed"); }catch{} }
     } else {
       banner.classList.add("hidden");
+      if (force && status && !status.hasUpdate){
+        banner.innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px;color:var(--dim)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> You are up to date — v${status.currentVersion} (latest ${status.latestVersion})</span><span class="spacer"></span><button id="update-banner-ok" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--dim);cursor:pointer">OK</button>`;
+        banner.classList.remove("hidden");
+        setTimeout(()=> document.getElementById("update-banner-ok")?.addEventListener("click", ()=> banner.classList.add("hidden")), 0);
+        setTimeout(()=> banner.classList.add("hidden"), 4000);
+      }
     }
-  } catch(e){ console.warn("updater check", e); }
+  } catch(e){ console.warn("updater check", e); const fs=document.getElementById("update-footer-status"); if(fs) fs.textContent="error"; }
 }
 function initUpdater(){
   const banner = document.getElementById("update-banner");
   const viewBtn = document.getElementById("update-view");
   const installBtn = document.getElementById("update-install");
   const dismissBtn = document.getElementById("update-dismiss");
+  const checkBtn = document.getElementById("check-update-btn");
   if (!banner) return;
   viewBtn?.addEventListener("click", async ()=>{ try{ await window.meteorAPI.updater.openRepo(); }catch{} });
   dismissBtn?.addEventListener("click", ()=>{ banner.classList.add("hidden"); try{ localStorage.setItem("meteor:updateDismissed", Date.now().toString()); }catch{} });
@@ -3341,6 +3359,14 @@ function initUpdater(){
       installBtn.disabled = false;
       addMsg("system", "Update failed: " + (e instanceof Error ? e.message : String(e)));
     }
+  });
+  checkBtn?.addEventListener("click", async ()=>{
+    const orig = checkBtn.textContent;
+    checkBtn.textContent = "Checking…";
+    checkBtn.disabled = true;
+    await refreshUpdateBanner(true);
+    checkBtn.textContent = orig;
+    checkBtn.disabled = false;
   });
   refreshUpdateBanner(false);
   setInterval(()=> refreshUpdateBanner(false), 1000*60*30);
