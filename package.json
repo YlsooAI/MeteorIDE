@@ -49,7 +49,10 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": ["dmg"],
-      "identity": null
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": null,
+      "entitlementsInherit": null
     },
     "win": {
       "target": ["nsis"]
