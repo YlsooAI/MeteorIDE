@@ -179,6 +179,15 @@ ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string;
   }
 });
 
+let mcpToolsCache: { tools: Array<{ server: string; name: string; description?: string; inputSchema?: unknown }>; at: number; cwd: string } | null = null;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
+    p.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+  });
+}
+
 ipcMain.handle(
   "meteor:complete",
   async (event, payload: { id: string; modelKey?: string; reasoningEffort?: string; messages: Message[]; apiKey?: string }) => {
@@ -186,6 +195,12 @@ ipcMain.handle(
     const send = (channel: string, data?: unknown) => {
       if (!event.sender.isDestroyed()) event.sender.send(`${channel}:${id}`, data);
     };
+    // hard guarantee: never leave the renderer busy forever
+    let settled = false;
+    const overallWatchdog = setTimeout(() => {
+      if (!settled) { settled = true; send("meteor:error", "Request timed out (15 min limit). Try again or check your MCP servers."); }
+    }, 15 * 60 * 1000);
+    const finish = () => { if (!settled) { settled = true; clearTimeout(overallWatchdog); } };
     try {
       const model = resolveModel(payload.modelKey ?? DEFAULT_MODEL);
       const apiKey = resolveApiKey(payload.apiKey);
@@ -223,8 +238,15 @@ ipcMain.handle(
         const serverNames = Object.keys(servers);
         const shouldExpose = mentionsMcp(lastText, serverNames);
         if (shouldExpose) {
-          const { listMcpTools } = await import("./mcp-client.js");
-          mcpTools = await listMcpTools(termCwd);
+          // cache tool list for 5 min per cwd — avoids re-spawning/listing servers every turn
+          const now = Date.now();
+          if (mcpToolsCache && now - mcpToolsCache.at < 300000 && mcpToolsCache.cwd === termCwd) {
+            mcpTools = mcpToolsCache.tools;
+          } else {
+            const { listMcpTools } = await import("./mcp-client.js");
+            mcpTools = await withTimeout(listMcpTools(termCwd), 25000, "Listing MCP tools");
+            mcpToolsCache = { tools: mcpTools, at: now, cwd: termCwd };
+          }
           // double-check with discovered tool names for edge cases where user typed exact tool name
           if (mcpTools.length > 0) {
             const toolNames = mcpTools.map(t => t.name);
@@ -235,7 +257,9 @@ ipcMain.handle(
         } else {
           // no mention -> keep mcpTools empty so model can't auto-call
         }
-      } catch {}
+      } catch (e) {
+        send("meteor:tool_info", { count: 0, tools: [], error: e instanceof Error ? e.message : String(e) });
+      }
       const toolDefs = mcpTools;
       let messages: any[] = [...payload.messages];
       let finalText = "";
@@ -261,12 +285,12 @@ ipcMain.handle(
         for (const tc of result.toolCalls) {
           send("meteor:tool_call", { id: tc.id, server: tc.server, tool: tc.toolName, name: tc.name, arguments: tc.arguments, parsedArgs: tc.parsedArgs });
         }
-        // Execute MCP tools
+        // Execute MCP tools (each capped at 60s so a wedged server can't freeze the chat)
         const { callMcpTool } = await import("./mcp-client.js");
         const toolResults: Array<{ tool_call_id: string; content: string }> = [];
         for (const tc of result.toolCalls) {
           try {
-            const res = await callMcpTool(tc.server, tc.toolName, tc.parsedArgs ?? {}, termCwd);
+            const res = await withTimeout(callMcpTool(tc.server, tc.toolName, tc.parsedArgs ?? {}, termCwd), 60000, `Tool ${tc.server}.${tc.toolName}`);
             const text = (res.content ?? []).map((c: { text?: string }) => c.text ?? "").join("\n") || JSON.stringify(res, null, 2);
             toolResults.push({ tool_call_id: tc.id, content: text });
             send("meteor:tool_result", { id: tc.id, server: tc.server, tool: tc.toolName, result: text, isError: !!res.isError });
@@ -290,6 +314,7 @@ ipcMain.handle(
         if (iter === 5) break;
       }
       send("meteor:done", { text: finalText, reasoning: finalReasoning || undefined });
+      finish();
     } catch (err) {
       const msg =
         err instanceof ZenError && err.status === 401
@@ -298,6 +323,7 @@ ipcMain.handle(
             ? err.message
             : String(err);
       send("meteor:error", msg);
+      finish();
     }
   },
 );

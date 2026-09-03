@@ -84,7 +84,7 @@ async function readError(res: Response): Promise<never> {
   );
 }
 
-async function* sseDataEvents(res: Response): AsyncGenerator<string> {
+async function* sseDataEvents(res: Response, onActivity?: () => void): AsyncGenerator<string> {
   if (!res.body) throw new ApiError("Empty response body");
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -92,6 +92,7 @@ async function* sseDataEvents(res: Response): AsyncGenerator<string> {
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
+    onActivity?.();
     buffer += decoder.decode(value, { stream: true });
     let sep: number;
     while ((sep = buffer.indexOf("\n")) !== -1) {
@@ -103,6 +104,41 @@ async function* sseDataEvents(res: Response): AsyncGenerator<string> {
   for (const line of buffer.split("\n")) {
     if (line.startsWith("data:")) yield line.slice(5).trim();
   }
+}
+
+// Watchdog that aborts stalled model requests: overall cap + inactivity cap.
+// Without this a hung upstream stream left the app "frozen" forever (no done/error ever sent).
+const STREAM_OVERALL_MS = 300000; // 5 min hard cap per completion
+const STREAM_IDLE_MS = 90000; // abort if no bytes for 90s
+function makeStreamGuard(outer?: AbortSignal) {
+  const ctrl = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const overallTimer = setTimeout(() => ctrl.abort({ reason: "overall" }), STREAM_OVERALL_MS);
+  const resetIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => ctrl.abort({ reason: "idle" }), STREAM_IDLE_MS);
+  };
+  resetIdle();
+  const onOuter = () => ctrl.abort({ reason: "outer" });
+  outer?.addEventListener("abort", onOuter);
+  if (outer?.aborted) onOuter();
+  return {
+    signal: ctrl.signal,
+    resetIdle,
+    aborted: () => ctrl.signal.aborted,
+    abortReason: () => (ctrl.signal.reason as { reason?: string } | undefined)?.reason,
+    done: () => {
+      clearTimeout(overallTimer);
+      if (idleTimer) clearTimeout(idleTimer);
+      outer?.removeEventListener("abort", onOuter);
+    },
+  };
+}
+function streamAbortError(g: ReturnType<typeof makeStreamGuard>): ApiError {
+  const r = g.abortReason();
+  if (r === "idle") return new ApiError(`Model stream stalled — no data received for ${STREAM_IDLE_MS / 1000}s. If MCP tools are in use, the tool or server may be hung.`);
+  if (r === "overall") return new ApiError(`Model request exceeded ${STREAM_OVERALL_MS / 60000} minute limit.`);
+  return new ApiError("Request aborted.");
 }
 
 function extractResponsesText(payload: unknown): string {
@@ -164,52 +200,62 @@ async function completeChat(opts: CompletionOptions): Promise<CompletionResult> 
     }
     return m;
   });
-  const res = await fetch(`${ZEN_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${opts.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: opts.apiModel,
-      messages,
-      stream: opts.stream !== false,
-      ...(chatTools ? { tools: chatTools, tool_choice: "auto" } : {}),
-      ...reasoningPayload,
-    }),
-    signal: opts.signal,
-  });
-  if (!res.ok) await readError(res);
-
-  if (opts.stream === false) {
-    const json = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string }; type: string }> } }>;
-    };
-    const msg = json.choices?.[0]?.message as { content?: string | null; reasoning?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string }; type: string }> } | undefined;
-    const text = msg?.content ?? "";
-    const reasoning = (msg?.reasoning ?? msg?.reasoning_content ?? "") as string;
-    if (reasoning) opts.onReasoningDelta?.(reasoning);
-    const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).map((tc) => {
-      const [server, ...rest] = tc.function.name.split("__");
-      const toolName = rest.join("__") || tc.function.name;
-      return {
-        id: tc.id,
-        name: tc.function.name,
-        server: server || "unknown",
-        toolName,
-        arguments: tc.function.arguments,
-        parsedArgs: (() => { try { return JSON.parse(tc.function.arguments); } catch { return tc.function.arguments; } })(),
-      };
+  const guard = makeStreamGuard(opts.signal);
+  let res: Response;
+  try {
+    res = await fetch(`${ZEN_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${opts.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: opts.apiModel,
+        messages,
+        stream: opts.stream !== false,
+        ...(chatTools ? { tools: chatTools, tool_choice: "auto" } : {}),
+        ...reasoningPayload,
+      }),
+      signal: guard.signal,
     });
-    if (text) opts.onDelta?.(text);
-    return { text, reasoning, toolCalls };
+    if (!res.ok) await readError(res);
+  } catch (e) {
+    guard.done();
+    if (guard.aborted() && !(e instanceof ApiError)) throw streamAbortError(guard);
+    throw e;
   }
 
-  let out = "";
-  let reasoningOut = "";
-  const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
-  for await (const data of sseDataEvents(res)) {
-    if (data === "[DONE]") break;
+  try {
+    if (opts.stream === false) {
+      const json = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string }; type: string }> } }>;
+      };
+      const msg = json.choices?.[0]?.message as { content?: string | null; reasoning?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string }; type: string }> } | undefined;
+      const text = msg?.content ?? "";
+      const reasoning = (msg?.reasoning ?? msg?.reasoning_content ?? "") as string;
+      if (reasoning) opts.onReasoningDelta?.(reasoning);
+      const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).map((tc) => {
+        const [server, ...rest] = tc.function.name.split("__");
+        const toolName = rest.join("__") || tc.function.name;
+        return {
+          id: tc.id,
+          name: tc.function.name,
+          server: server || "unknown",
+          toolName,
+          arguments: tc.function.arguments,
+          parsedArgs: (() => { try { return JSON.parse(tc.function.arguments); } catch { return tc.function.arguments; } })(),
+        };
+      });
+      if (text) opts.onDelta?.(text);
+      return { text, reasoning, toolCalls };
+    }
+
+    let out = "";
+    let reasoningOut = "";
+    const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
+    for await (const data of sseDataEvents(res, () => guard.resetIdle())) {
+      guard.resetIdle();
+      if (data === "[DONE]") break;
     let chunk: {
       choices?: Array<{
         delta?: {
@@ -263,7 +309,7 @@ async function completeChat(opts: CompletionOptions): Promise<CompletionResult> 
       }
     }
   }
-   const toolCalls: ToolCall[] = [];
+    const toolCalls: ToolCall[] = [];
   for (const [, v] of toolAcc) {
     if (!v.name) continue;
     const [server, ...rest] = v.name.split("__");
@@ -278,6 +324,12 @@ async function completeChat(opts: CompletionOptions): Promise<CompletionResult> 
     });
   }
   return { text: out, reasoning: reasoningOut || undefined, toolCalls };
+  } catch (e) {
+    if (guard.aborted() && !(e instanceof ApiError)) throw streamAbortError(guard);
+    throw e;
+  } finally {
+    guard.done();
+  }
 }
 
 function mcpToolsToResponsesTools(tools?: ToolDefinition[]) {
@@ -334,26 +386,35 @@ async function completeResponses(opts: CompletionOptions): Promise<CompletionRes
       content: [{ type: m.role === "assistant" ? "output_text" as const : "input_text" as const, text: m.content as string }],
     };
   });
-  const res = await fetch(`${ZEN_BASE_URL}/responses`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${opts.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: opts.apiModel,
-      instructions: systemMessages.map((m) => m.content).join("\n\n") || undefined,
-      input,
-      stream: opts.stream !== false,
-      ...(responsesTools ? { tools: responsesTools } : {}),
-      ...reasoningPayload,
-    }),
-    signal: opts.signal,
-  });
-  if (!res.ok) await readError(res);
+  const guard = makeStreamGuard(opts.signal);
+  let res: Response;
+  try {
+    res = await fetch(`${ZEN_BASE_URL}/responses`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${opts.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: opts.apiModel,
+        instructions: systemMessages.map((m) => m.content).join("\n\n") || undefined,
+        input,
+        stream: opts.stream !== false,
+        ...(responsesTools ? { tools: responsesTools } : {}),
+        ...reasoningPayload,
+      }),
+      signal: guard.signal,
+    });
+    if (!res.ok) await readError(res);
+  } catch (e) {
+    guard.done();
+    if (guard.aborted() && !(e instanceof ApiError)) throw streamAbortError(guard);
+    throw e;
+  }
 
-  if (opts.stream === false) {
-    const json = await res.json();
+  try {
+    if (opts.stream === false) {
+      const json = await res.json();
     const text = extractResponsesText(json);
     let reasoning: string | undefined;
     try {
@@ -392,7 +453,8 @@ async function completeResponses(opts: CompletionOptions): Promise<CompletionRes
   let reasoningOut = "";
   const toolAcc = new Map<string, { name: string; arguments: string; id: string }>();
   // For responses, tool calls may come as events
-  for await (const data of sseDataEvents(res)) {
+  for await (const data of sseDataEvents(res, () => guard.resetIdle())) {
+    guard.resetIdle();
     if (!data || data === "[DONE]") continue;
     let event: { type?: string; delta?: unknown; text?: string; summary?: string; reasoning?: string; name?: string; arguments?: string; call_id?: string; output_index?: number; item?: unknown; content?: unknown };
     try {
@@ -465,6 +527,12 @@ async function completeResponses(opts: CompletionOptions): Promise<CompletionRes
     });
   }
   return { text: out, reasoning: reasoningOut || undefined, toolCalls };
+  } catch (e) {
+    if (guard.aborted() && !(e instanceof ApiError)) throw streamAbortError(guard);
+    throw e;
+  } finally {
+    guard.done();
+  }
 }
 
 export function complete(opts: CompletionOptions): Promise<CompletionResult> {

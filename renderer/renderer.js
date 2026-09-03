@@ -1989,6 +1989,20 @@ async function sendCurrent() {
   const toolsDiv = document.createElement("div");
   toolsDiv.className = "msg-tools";
   body.append(textDiv, toolsDiv);
+  // watchdog state — guarantees the UI can never stay busy/frozen forever
+  let lastActivity = Date.now();
+  const bump = () => { lastActivity = Date.now(); };
+  let activityWatch = null;
+  const failStream = (msg) => {
+    if (activityWatch) { clearInterval(activityWatch); activityWatch = null; }
+    textDiv.textContent = msg;
+    body.parentElement.classList.add("error");
+    if (reasoningAcc) {
+      const statusEl = reasoningHead.querySelector(".reasoning-status");
+      if (statusEl) statusEl.textContent = "error";
+    }
+    setBusy(false);
+  };
   let acc = "";
   function stripWritesForDisplay(s){
     // hide ```write: blocks from chat text — file cards show them instead
@@ -2010,6 +2024,7 @@ async function sendCurrent() {
   }
   const toolBlocks = new Map();
   const onToolCallUI = (call) => {
+    bump();
     const id = call.id || call.tool || call.name || `${Date.now()}`;
     if (toolBlocks.has(id)) return;
     const block = buildMcpToolBlock({ id, server: call.server || "mcp", tool: call.tool || call.name || "unknown", name: call.name || `${call.server}__${call.tool}`, arguments: call.arguments || "{}", parsedArgs: call.parsedArgs });
@@ -2018,6 +2033,7 @@ async function sendCurrent() {
     els.messages.scrollTop = els.messages.scrollHeight;
   };
   const onToolResultUI = (res) => {
+    bump();
     const b = toolBlocks.get(res.id) || [...toolBlocks.values()].slice(-1)[0];
     if (b) updateMcpToolResult(b, res.result, !!res.isError);
     // also log to terminal history for context
@@ -2028,6 +2044,7 @@ async function sendCurrent() {
     { modelKey: currentModel, reasoningEffort: currentReasoningEffort, messages: [{ role: "system", content: buildSystemMessage() }, ...chatHistory] },
     {
       onChunk: (delta) => {
+        bump();
         acc += delta;
         refreshLiveFiles();
         const display = stripWritesForDisplay(acc);
@@ -2040,6 +2057,7 @@ async function sendCurrent() {
         els.messages.scrollTop = els.messages.scrollHeight;
       },
       onReasoning: (delta) => {
+        bump();
         if (!delta) return;
         if (reasoningBox.classList.contains("hidden")) {
           reasoningBox.classList.remove("hidden");
@@ -2054,6 +2072,7 @@ async function sendCurrent() {
       onToolCall: onToolCallUI,
       onToolResult: onToolResultUI,
       onToolInfo: (info) => {
+        bump();
         if (info && info.count) {
           const pill = document.createElement("div");
           pill.className = "tool-info";
@@ -2063,9 +2082,12 @@ async function sendCurrent() {
         }
       },
       onToolDelta: (delta) => {
+        bump();
         // optional streaming of tool args — ignore for now, tool_call will come as complete
       },
       onDone: async (data) => {
+        if (activityWatch) { clearInterval(activityWatch); activityWatch = null; }
+        bump();
         // finalize reasoning
         if (data && data.reasoning && !reasoningAcc) {
           reasoningAcc = data.reasoning;
@@ -2123,17 +2145,19 @@ async function sendCurrent() {
         els.messages.scrollTop = els.messages.scrollHeight;
       },
       onError: (msg) => {
-        textDiv.textContent = msg;
-        body.parentElement.classList.add("error");
-        if (reasoningAcc) {
-          const statusEl = reasoningHead.querySelector(".reasoning-status");
-          if (statusEl) statusEl.textContent = "error";
-        }
-        setBusy(false);
+        failStream(msg);
       },
     },
   );
-  void stop;
+  // watchdog: if the main process goes silent (hung stream/tool), unfreeze the UI
+  activityWatch = setInterval(() => {
+    if (Date.now() - lastActivity > 90000) {
+      const w = activityWatch; activityWatch = null;
+      if (w) clearInterval(w);
+      try { stop(); } catch {}
+      failStream("No response for 90s — the request stalled (possibly an MCP tool or server hung). Send a new message to retry.");
+    }
+  }, 5000);
 }
 
 function autoSizeInput() {

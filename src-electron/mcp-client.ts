@@ -122,11 +122,17 @@ class StdioMcpConnection {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    await this.request("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "meteor", version: app.getVersion() },
-    }, 8000);
+    try {
+      await this.request("initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "meteor", version: app.getVersion() },
+      }, 8000);
+    } catch (e) {
+      // handshake failed — kill so we don't reuse a wedged process
+      this.kill();
+      throw e;
+    }
     this.notify("notifications/initialized", {});
     this.initialized = true;
   }
@@ -146,8 +152,14 @@ class StdioMcpConnection {
 
   async callTool(name: string, args: unknown): Promise<McpToolCallResult> {
     await this.initialize();
-    const res = (await this.request("tools/call", { name, arguments: args ?? {} }, 15000)) as McpToolCallResult;
-    return res;
+    try {
+      const res = (await this.request("tools/call", { name, arguments: args ?? {} }, 15000)) as McpToolCallResult;
+      return res;
+    } catch (e) {
+      // server is wedged or died — kill it so the next call spawns a fresh process
+      this.kill();
+      throw e;
+    }
   }
 
   kill() {
