@@ -1043,6 +1043,17 @@ async function refreshProjects(){
   renderProjects();
 }
 
+// Display plain-text for project/chat titles (strips markdown the AI sometimes returns,
+// e.g. "## My Title" — also repairs titles saved before the generator sanitizer fix)
+function plainTitle(s) {
+  return String(s || "")
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^\*{1,3}\s*|\s*\*{1,3}$/g, "")
+    .replace(/^_{1,3}\s*|\s*_{1,3}$/g, "")
+    .replace(/^["'`\s]+|["'`\s]+$/g, "")
+    .trim();
+}
+
 function renderProjects(){
   const container = document.getElementById("sb-projects");
   const tree = document.getElementById("tree");
@@ -1075,9 +1086,9 @@ function renderProjects(){
       group.className = "project-group";
       const row = document.createElement("button");
       row.className = "proj-row" + (isActive ? " active" : "");
-      row.title = `${p.name} — ${p.folder_path}\n${p.last_message || ""}\nClick to toggle chats, right-click to delete`;
+      row.title = `${plainTitle(p.name)} — ${p.folder_path}\n${p.last_message || ""}\nClick to toggle chats, right-click to delete`;
       const folderIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/></svg>`;
-      row.innerHTML = `${folderIcon} <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left">${esc(p.name)}</span><small style="color:var(--dim2);font-family:var(--mono);font-size:10px">${timeAgo(p.updated_at)}</small><span class="chev">${isExpanded ? ICONS.chevronDown : ICONS.chevronRight}</span>`;
+      row.innerHTML = `${folderIcon} <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left">${esc(plainTitle(p.name))}</span><small style="color:var(--dim2);font-family:var(--mono);font-size:10px">${timeAgo(p.updated_at)}</small><span class="chev">${isExpanded ? ICONS.chevronDown : ICONS.chevronRight}</span>`;
       if (isActive) row.style.background = "rgba(255,106,42,.1)";
       const chats = document.createElement("div");
       chats.className = "project-chats" + (isExpanded ? "" : " hidden");
@@ -1196,7 +1207,7 @@ async function switchProject(id){
     const welcome = document.createElement("div");
     welcome.className = "msg assistant";
     welcome.style.display = "none";
-    welcome.innerHTML = '<div class="msg-head"><span style="color:var(--accent);display:inline-flex;vertical-align:middle"><svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="currentColor"/></svg></span> meteor</div><div class="msg-body tui-box">Project: ' + esc(proj.name) + ' — ' + esc(proj.folder_path) + '</div>';
+    welcome.innerHTML = '<div class="msg-head"><span style="color:var(--accent);display:inline-flex;vertical-align:middle"><svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="currentColor"/></svg></span> meteor</div><div class="msg-body tui-box">Project: ' + esc(plainTitle(proj.name)) + ' — ' + esc(proj.folder_path) + '</div>';
     els.messages.append(welcome);
     for (let i=0; i<chatHistory.length; i++){
       const m = chatHistory[i];
@@ -1212,7 +1223,7 @@ async function switchProject(id){
       }
     }
     updateCenterVisibility();
-    addMsg("system", `↪ switched to ${proj.name}`);
+    addMsg("system", `↪ switched to ${plainTitle(proj.name)}`);
   } catch(e){ console.warn("loadMessages", e); }
 }
 

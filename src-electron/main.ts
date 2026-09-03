@@ -147,7 +147,7 @@ ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string;
   // Build prompt for Sunlight 2 Pro
   const firstMsg = (payload.firstMessage || proj.last_message || "").slice(0, 800);
   const firstResp = (payload.firstResponse || "").slice(0, 800);
-  const prompt = `Generate a short, concise chat title (3-6 words, no quotes, no period, Title Case) that summarizes this conversation. Return ONLY the title, nothing else.\n\nUser: ${firstMsg}\n${firstResp ? `Assistant: ${firstResp}` : ""}`;
+  const prompt = `Generate a short, concise chat title (3-6 words, no quotes, no period, Title Case, PLAIN TEXT ONLY — no markdown, no # symbols, no bold) that summarizes this conversation. Return ONLY the title, nothing else.\n\nUser: ${firstMsg}\n${firstResp ? `Assistant: ${firstResp}` : ""}`;
   const apiKey = resolveApiKey();
   if (!apiKey) throw new Error("No API key for title generation");
   const proModel = resolveModel("sunlight-2-pro");
@@ -164,7 +164,8 @@ ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string;
       reasoningEffort: "low",
     });
     let title = (result.text || "").trim();
-    // sanitize: remove quotes, newlines, trailing period, limit length
+    // sanitize: strip markdown (## headings, **bold**, *italic*), quotes, newlines, trailing period, limit length
+    title = title.replace(/^#{1,6}\s+/, "").replace(/^\*{1,3}\s*|\s*\*{1,3}$/g, "").replace(/^_{1,3}\s*|\s*_{1,3}$/g, "");
     title = title.replace(/^["'`\s]+|["'`\s]+$/g, "").replace(/\n.*$/s, "").replace(/[.]+$/g, "").trim();
     title = title.split(/\s+/).slice(0, 6).join(" ");
     if (title.length > 60) title = title.slice(0, 60).trim();
