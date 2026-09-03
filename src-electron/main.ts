@@ -760,6 +760,28 @@ ipcMain.handle("updater:getStatus", async () => {
   if (!lastUpdateCheck) return await checkForUpdates(false);
   return lastUpdateCheck;
 });
+ipcMain.handle("updater:getChangelog", async () => {
+  // Notes for the RUNNING version (shown once after each update)
+  const version = app.getVersion();
+  const norm = version.replace(/^v/, "");
+  const headers: Record<string, string> = { "User-Agent": "MeteorIDE-Updater", Accept: "application/vnd.github+json" };
+  const urls = [
+    `https://api.github.com/repos/${GITHUB_REPO}/releases/tags/v${norm}`,
+    `https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${norm}`,
+    GITHUB_API_RELEASE,
+  ];
+  for (const u of urls) {
+    try {
+      const r = await fetch(u, { headers, signal: AbortSignal.timeout(8000) });
+      if (!r.ok) continue;
+      const j = await r.json() as { tag_name?: string; name?: string; body?: string; html_url?: string; published_at?: string };
+      if (j.tag_name) {
+        return { version, tag: j.tag_name, title: j.name || j.tag_name, notes: j.body || "", url: j.html_url || GITHUB_URL, date: j.published_at || "" };
+      }
+    } catch {}
+  }
+  return { version, tag: "", title: `What's new in v${version}`, notes: "", url: GITHUB_URL, date: "" };
+});
 ipcMain.handle("updater:openRepo", async () => {
   await shell.openExternal(GITHUB_URL);
   return { ok: true };

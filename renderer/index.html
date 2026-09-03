@@ -82,7 +82,7 @@
 
       <div class="sb-footer">
         <div style="padding:6px 8px 4px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim2);border-top:1px solid #1e1e22;margin-top:6px">
-          <span id="update-footer-version" style="font-family:var(--mono)">v0.2.10</span>
+          <span id="update-footer-version" title="Show what's new" style="font-family:var(--mono);cursor:pointer">v0.2.11</span>
           <span id="update-footer-status" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
           <button id="check-update-btn" title="Check for updates" style="font-size:11px;padding:3px 8px;border:1px solid #2a2a30;border-radius:6px;background:#1e1e22;color:var(--dim);cursor:pointer">Check</button>
         </div>
@@ -150,8 +150,10 @@
           </div>
           <div class="cc-input-wrap">
             <textarea id="input" rows="1" placeholder="Ask Meteor anything, @ to add context, / for commands or capabilities"></textarea>
+            <div id="mention-popup" class="mention-popup hidden"></div>
           </div>
           <div id="image-preview" class="img-preview hidden"></div>
+          <div id="attach-preview" class="attach-preview hidden"></div>
           <input id="image-input" type="file" accept="image/*,image/png,image/jpeg,image/webp,image/gif" multiple hidden />
           <div class="cc-bar">
             <div class="cc-left">
@@ -461,6 +463,28 @@
           <p><b>Connect</b> parses, validates and writes to <code>~/.config/meteor/config.json</code>.</p>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Changelog (shows once after each update) -->
+  <div id="changelog-overlay" class="hidden" aria-hidden="true">
+    <div id="changelog-backdrop"></div>
+    <div id="changelog-panel" role="dialog" aria-modal="true" aria-labelledby="changelog-title">
+      <header class="changelog-head">
+        <div class="auth-logo" style="display:grid;place-items:center;background:#fff;padding:4px;border-radius:10px;overflow:hidden;flex-shrink:0"><img src="./meteor-logo.png" width="28" height="28" style="object-fit:contain;display:block" alt="Meteor logo" /></div>
+        <div style="min-width:0">
+          <h2 id="changelog-title">What's new</h2>
+          <p class="changelog-sub" id="changelog-sub"></p>
+        </div>
+        <span class="spacer"></span>
+        <button id="changelog-close" class="btn-icon" title="Close" style="display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+      </header>
+      <div id="changelog-body" class="changelog-body"></div>
+      <footer class="changelog-foot">
+        <button id="changelog-view" title="Open release on GitHub">View release</button>
+        <span class="spacer"></span>
+        <button id="changelog-ok" class="btn-primary">Start using Meteor</button>
+      </footer>
     </div>
   </div>
 

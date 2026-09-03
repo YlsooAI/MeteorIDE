@@ -109,6 +109,7 @@ contextBridge.exposeInMainWorld("meteorAPI", {
   updater: {
     check: (force) => ipcRenderer.invoke("updater:check", { force }),
     getStatus: () => ipcRenderer.invoke("updater:getStatus"),
+    changelog: () => ipcRenderer.invoke("updater:getChangelog"),
     install: () => ipcRenderer.invoke("updater:install"),
     openRepo: () => ipcRenderer.invoke("updater:openRepo"),
     restart: () => ipcRenderer.invoke("app:restart"),

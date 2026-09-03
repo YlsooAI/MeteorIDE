@@ -139,6 +139,227 @@ function addPendingFiles(fileList){
   if (skipped) addMsg("system", `↷ skipped ${skipped} non-image or over-limit file(s)`);
 }
 
+/* ── @ file-attach ─────────────────────────────────────────────── */
+const MAX_ATTACHED = 6;
+const ATTACH_FILE_CAP = 30000;
+let attachedFiles = []; // [{path, content}]
+let mentionState = null; // {query, start, matches, sel}
+
+function tabContent(rel) {
+  const t = tabs.find((x) => x.rel === rel);
+  if (!t) return null;
+  if (t.id === activeTabId) return els.editor.value;
+  return t.buffer ?? t.savedContent ?? null;
+}
+
+function attachFileByPath(path) {
+  if (!path) return false;
+  if (attachedFiles.some((f) => f.path === path)) return true;
+  if (attachedFiles.length >= MAX_ATTACHED) {
+    addMsg("system", `✗ too many attached files (max ${MAX_ATTACHED}) — remove one first`);
+    return false;
+  }
+  let content = tabContent(path);
+  if (content == null && workspace && workspace.files.get(path)?.content != null) {
+    content = workspace.files.get(path).content;
+  }
+  if (content == null) {
+    addMsg("system", `✗ can't attach ${path} (no content available)`);
+    return false;
+  }
+  attachedFiles.push({ path, content });
+  renderAttachPreview();
+  return true;
+}
+
+function removeAttachedFile(path) {
+  attachedFiles = attachedFiles.filter((f) => f.path !== path);
+  renderAttachPreview();
+}
+
+function clearAttachedFiles() {
+  attachedFiles = [];
+  renderAttachPreview();
+}
+
+function renderAttachPreview() {
+  const wrap = document.getElementById("attach-preview");
+  if (!wrap) return;
+  if (!attachedFiles.length) { wrap.classList.add("hidden"); wrap.innerHTML = ""; return; }
+  wrap.classList.remove("hidden");
+  wrap.innerHTML = "";
+  for (const f of attachedFiles) {
+    const chip = document.createElement("div");
+    chip.className = "attach-chip";
+    chip.title = f.path;
+    chip.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><span>${esc(f.path)}</span>`;
+    const x = document.createElement("button");
+    x.className = "remove";
+    x.title = "Remove";
+    x.innerHTML = `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
+    x.addEventListener("click", () => removeAttachedFile(f.path));
+    chip.append(x);
+    wrap.append(chip);
+  }
+}
+
+function getMentionQuery() {
+  const el = els.input;
+  if (!el) return null;
+  const pos = el.selectionStart ?? el.value.length;
+  const before = el.value.slice(0, pos);
+  const m = /(^|\s)@([^\s@]*)$/.exec(before);
+  if (!m) return null;
+  return { query: m[2], start: pos - m[2].length - 1 };
+}
+
+function findMentionMatches(q) {
+  const ql = (q || "").toLowerCase();
+  const seen = new Set(attachedFiles.map((f) => f.path));
+  const out = [];
+  // open editor tabs first (most relevant)
+  for (const t of tabs) {
+    if (!t.rel || seen.has(t.rel) || out.some((o) => o.path === t.rel)) continue;
+    const base = t.rel.split("/").pop().toLowerCase();
+    if (!ql || t.rel.toLowerCase().includes(ql) || base.includes(ql)) {
+      out.push({ path: t.rel, kind: "open", note: t.buffer !== t.savedContent ? "edited" : "" });
+    }
+  }
+  if (workspace) {
+    for (const f of workspace.files.values()) {
+      if (f.content === null || seen.has(f.path) || out.some((o) => o.path === f.path)) continue;
+      const base = f.path.split("/").pop().toLowerCase();
+      if (!ql || f.path.toLowerCase().includes(ql) || base.includes(ql)) {
+        out.push({ path: f.path, kind: "file", note: `${formatBytes(f.size)}` });
+      }
+    }
+  }
+  out.sort((a, b) => {
+    const ab = a.path.split("/").pop().toLowerCase();
+    const bb = b.path.split("/").pop().toLowerCase();
+    const score = (n) => (!ql ? 0 : n.startsWith(ql) ? 0 : n.includes(ql) ? 1 : 2);
+    const d = score(ab) - score(bb);
+    if (d) return d;
+    if ((a.kind === "open") !== (b.kind === "open")) return a.kind === "open" ? -1 : 1;
+    return a.path.length - b.path.length;
+  });
+  return out.slice(0, 8);
+}
+
+function hideMentionPopup() {
+  mentionState = null;
+  document.getElementById("mention-popup")?.classList.add("hidden");
+}
+
+function renderMentionPopup() {
+  const popup = document.getElementById("mention-popup");
+  if (!popup || !mentionState) return;
+  popup.innerHTML = "";
+  popup.classList.remove("hidden");
+  if (!mentionState.matches.length) {
+    const d = document.createElement("div");
+    d.className = "mention-empty";
+    d.textContent = workspace ? "No matching files" : "Open a folder to attach workspace files";
+    popup.append(d);
+    return;
+  }
+  mentionState.matches.forEach((item, i) => {
+    const b = document.createElement("button");
+    b.className = "mention-item" + (i === mentionState.sel ? " sel" : "");
+    b.innerHTML = `<span class="mention-kind">${item.kind === "open" ? "open" : "file"}</span><span class="mpath">${esc(item.path)}</span>${item.note ? `<small>${esc(item.note)}</small>` : ""}`;
+    b.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      acceptMention(item);
+    });
+    popup.append(b);
+  });
+  const sel = popup.querySelector(".mention-item.sel");
+  if (sel) sel.scrollIntoView({ block: "nearest" });
+}
+
+function updateMentionPopup() {
+  const q = getMentionQuery();
+  if (!q) { hideMentionPopup(); return; }
+  const matches = findMentionMatches(q.query);
+  if (!matches.length && !workspace && !tabs.some((t) => t.rel)) { hideMentionPopup(); return; }
+  const prevSel = mentionState && mentionState.query === q.query ? mentionState.sel : 0;
+  mentionState = { query: q.query, start: q.start, matches, sel: Math.min(prevSel, Math.max(0, matches.length - 1)) };
+  renderMentionPopup();
+}
+
+function mentionMove(d) {
+  if (!mentionState || !mentionState.matches.length) return;
+  const n = mentionState.matches.length;
+  mentionState.sel = (mentionState.sel + d + n) % n;
+  renderMentionPopup();
+}
+
+function acceptMention(item) {
+  if (!mentionState || !item) { hideMentionPopup(); return; }
+  const el = els.input;
+  const before = el.value.slice(0, mentionState.start);
+  const after = el.value.slice(el.selectionStart ?? el.value.length);
+  el.value = before + after;
+  el.selectionStart = el.selectionEnd = before.length;
+  hideMentionPopup();
+  attachFileByPath(item.path);
+  autoSizeInput();
+  el.focus();
+}
+
+// @tokens typed manually (never picked from the popup) resolve at send time
+function extractMentionTokens(text) {
+  const out = [];
+  const re = /@([^\s@`*,;:'"()\[\]{}]+)/g;
+  let m;
+  while ((m = re.exec(text || ""))) {
+    if (m[1] && !out.includes(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
+function resolveMentionToPath(tok) {
+  const t = (tok || "").replace(/^\.\//, "");
+  if (!t) return null;
+  if (workspace && workspace.files.has(t) && workspace.files.get(t).content !== null) return t;
+  const tl = t.toLowerCase();
+  // unique basename match wins
+  const cands = [];
+  for (const tab of tabs) {
+    if (!tab.rel) continue;
+    if (tab.rel.toLowerCase() === tl || tab.rel.split("/").pop().toLowerCase() === tl) cands.push(tab.rel);
+  }
+  if (workspace) {
+    for (const f of workspace.files.values()) {
+      if (f.content === null) continue;
+      if (f.path.toLowerCase() === tl || f.path.split("/").pop().toLowerCase() === tl) cands.push(f.path);
+    }
+  }
+  const uniq = [...new Set(cands)];
+  return uniq.length === 1 ? uniq[0] : null;
+}
+
+function attachedBlock(files) {
+  if (!files || !files.length) return "";
+  let out = "# Attached files — explicitly referenced with @, treat as the primary context for this message\n";
+  for (const f of files) {
+    const body = clip(f.content ?? "", ATTACH_FILE_CAP, f.path);
+    out += `\n=== ${f.path} ===\n\`\`\`${langFor(f.path)}\n${body}\n\`\`\`\n`;
+  }
+  return out;
+}
+
+// Expand internal message shape ({attachments}) to plain API content
+function expandMessageForApi(m) {
+  const { attachments, ...rest } = m || {};
+  if (m && m.role === "user" && attachments && attachments.length) {
+    const block = attachedBlock(attachments);
+    if (typeof m.content === "string") return { ...rest, content: `${block}\n${m.content}` };
+    if (Array.isArray(m.content)) return { ...rest, content: [{ type: "text", text: block }, ...m.content] };
+  }
+  return rest;
+}
+
 const BASE_PROMPT =
   "You are Meteor, a helpful coding assistant. Be concise and use full markdown: headings, bold, italic, lists, tables, blockquotes, links, and fenced code blocks with language tags. Always use markdown for structure and readability.";
 
@@ -460,6 +681,18 @@ function addMsg(role, text, opts = {}) {
       imgRow.append(im);
     }
     body.append(imgRow);
+  }
+  if (opts.attachments && opts.attachments.length) {
+    const row = document.createElement("div");
+    row.className = "attach-chips";
+    for (const f of opts.attachments) {
+      const c = document.createElement("span");
+      c.className = "attach-chip-static";
+      c.title = f.path;
+      c.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><span>${esc(f.path)}</span>`;
+      row.append(c);
+    }
+    body.append(row);
   }
   if (role === "assistant" && !opts.error) {
     const txt = document.createElement("div");
@@ -970,7 +1203,7 @@ async function switchProject(id){
       if (m.role === "user"){
         const txt = typeof m.content === "string" ? m.content : (Array.isArray(m.content) ? m.content.map((c)=>c.text||"").join(" ") : String(m.content));
         const imgs = Array.isArray(m.content) ? m.content.filter((c)=>c.type==="image_url").map((c)=>c.image_url?.url).filter(Boolean) : [];
-        addMsg("user", txt, { images: imgs, chatIndex: i });
+        addMsg("user", txt, { images: imgs, attachments: m.attachments || [], chatIndex: i });
       } else if (m.role === "assistant"){
         const txt = typeof m.content === "string" ? m.content : String(m.content);
         addMsg("assistant", txt, { chatIndex: i });
@@ -1239,6 +1472,31 @@ function activeFileOverride() {
   return null;
 }
 
+function workspaceTreeText() {
+  const paths = [...workspace.files.keys()].sort();
+  const MAX_LINES = 100;
+  const groups = new Map();
+  const roots = [];
+  for (const p of paths) {
+    const i = p.indexOf("/");
+    if (i === -1) { roots.push(p); continue; }
+    const top = p.slice(0, i);
+    let g = groups.get(top);
+    if (!g) { g = { count: 0, sample: [] }; groups.set(top, g); }
+    g.count++;
+    if (g.sample.length < 5) g.sample.push(p);
+  }
+  const lines = [];
+  for (const r of roots.slice(0, 20)) lines.push(r);
+  for (const [top, g] of groups) {
+    lines.push(`${top}/ (${g.count} files)`);
+    for (const s of g.sample) lines.push(`  ${s.slice(top.length + 1)}`);
+    if (g.count > g.sample.length) lines.push(`  … +${g.count - g.sample.length} more`);
+    if (lines.length > MAX_LINES) break;
+  }
+  return lines.slice(0, MAX_LINES).join("\n");
+}
+
 function workspaceContext() {
   const listing = [];
   for (const f of workspace.files.values()) {
@@ -1246,14 +1504,27 @@ function workspaceContext() {
   }
   let out = `# Workspace\nRoot: ${workspace.root}\nFiles (${workspace.files.size}):\n${listing.join("\n")}\n`;
   if (workspace.truncated) out += "(scan truncated — some directories may be missing)\n";
+  out += `\n# Project tree (compact map — use it to locate files)\n${workspaceTreeText()}\n`;
 
   let budget = CONTEXT_BUDGET - out.length;
-  out += "\n# File contents\n";
+  out += "\n# File contents (open editor tabs first, then smallest files)\n";
   const override = activeFileOverride();
+  // open tabs (unsaved edits included) get priority after the active override
+  const openPaths = new Set();
+  const openFiles = [];
+  for (const t of tabs) {
+    if (!t.rel || openPaths.has(t.rel)) continue;
+    const c = tabContent(t.rel);
+    if (c == null) continue;
+    openPaths.add(t.rel);
+    if (override && t.rel === override.path) continue;
+    openFiles.push({ path: t.rel, content: c });
+  }
   const ordered = [];
   if (override) ordered.push(override);
+  for (const f of openFiles) ordered.push(f);
   const rest = [...workspace.files.values()]
-    .filter((f) => f.content !== null && f.path !== override?.path)
+    .filter((f) => f.content !== null && f.path !== override?.path && !openPaths.has(f.path))
     .sort((a, b) => a.size - b.size);
   for (const f of rest) ordered.push(f);
 
@@ -1285,9 +1556,10 @@ function buildSystemMessage() {
     ? "\n\n# Mode: PLAN — do NOT write files. Describe the build plan, list each file that would be created/modified with its path, and show snippets with normal ``` fences (not write:). The user will switch to Build to actually write."
     : "\n\n# Mode: BUILD — you may write files using write: blocks. New files will be created automatically, overwrites will ask for confirmation.";
   const withTerminal = `${EDIT_PROTOCOL}\n\n${TERMINAL_PROTOCOL}`;
-  if (workspace) return `${BASE_PROMPT}${modeNote}\n\n${withTerminal}\n\n${workspaceContext()}\n\n${terminalContext()}`;
+  const contextNote = "\n\n# Codebase awareness\n- The Workspace section lists the project tree and file contents (truncated to a budget; open editor tabs come first).\n- A user message may start with an \"# Attached files\" block — files the user explicitly referenced with @. Treat those as the primary context and prefer editing them over guessing paths.";
+  if (workspace) return `${BASE_PROMPT}${modeNote}\n\n${withTerminal}${contextNote}\n\n${workspaceContext()}\n\n${terminalContext()}`;
   const single = singleFileContext();
-  if (single) return `${BASE_PROMPT}${modeNote}\n\n${TERMINAL_PROTOCOL}\n\n${single}\n\n${terminalContext()}`;
+  if (single) return `${BASE_PROMPT}${modeNote}\n\n${TERMINAL_PROTOCOL}${contextNote}\n\n${single}\n\n${terminalContext()}`;
   return `${BASE_PROMPT}${modeNote}\n\n${TERMINAL_PROTOCOL}\n\n${terminalContext()}`;
 }
 
@@ -1883,7 +2155,7 @@ async function sendCurrent() {
   const raw = els.input.value;
   const text = raw.trim();
   const hasImages = pendingImages.length > 0;
-  if ((!text && !hasImages) || busy) return;
+  if ((!text && !hasImages && !attachedFiles.length) || busy) return;
   // slash commands only when no images
   if (!hasImages) {
     if (text === "/clear" || text === "/new") {
@@ -1940,11 +2212,26 @@ async function sendCurrent() {
       return;
     }
   }
-  // capture images before clearing
+  // capture images + @attachments before clearing
   const imgs = [...pendingImages];
   const imageUrls = imgs.map(i=>i.dataUrl);
+  const attachList = [...attachedFiles];
+  // resolve @tokens typed manually (never picked from the popup) into attachments
+  for (const tok of extractMentionTokens(text)) {
+    if (attachList.some((f) => f.path === tok)) continue;
+    const p = resolveMentionToPath(tok);
+    if (p && !attachList.some((f) => f.path === p) && attachList.length < MAX_ATTACHED) {
+      let content = tabContent(p);
+      if (content == null && workspace && workspace.files.get(p)?.content != null) {
+        content = workspace.files.get(p).content;
+      }
+      if (content != null) attachList.push({ path: p, content });
+    }
+  }
   els.input.value = "";
   clearPendingImages();
+  clearAttachedFiles();
+  hideMentionPopup();
   autoSizeInput();
   let userContent;
   if (hasImages) {
@@ -1955,8 +2242,8 @@ async function sendCurrent() {
   } else {
     userContent = text;
   }
-  chatHistory.push({ role: "user", content: userContent });
-  addMsg("user", text, { images: imageUrls, chatIndex: chatHistory.length - 1 });
+  chatHistory.push({ role: "user", content: userContent, ...(attachList.length ? { attachments: attachList } : {}) });
+  addMsg("user", text, { images: imageUrls, attachments: attachList, chatIndex: chatHistory.length - 1 });
   // meteor_projects: create on first message for this folder
   if (currentUser) {
     try {
@@ -2049,7 +2336,7 @@ async function sendCurrent() {
   };
   setBusy(true);
   const stop = window.meteorAPI.stream(
-    { modelKey: currentModel, reasoningEffort: currentReasoningEffort, messages: [{ role: "system", content: buildSystemMessage() }, ...chatHistory] },
+    { modelKey: currentModel, reasoningEffort: currentReasoningEffort, messages: [{ role: "system", content: buildSystemMessage() }, ...chatHistory.map(expandMessageForApi)] },
     {
       onChunk: (delta) => {
         bump();
@@ -3407,8 +3694,54 @@ function initUpdater(){
     checkBtn.textContent = orig;
     checkBtn.disabled = false;
   });
+  // footer version click re-opens the changelog for the running version
+  document.getElementById("update-footer-version")?.addEventListener("click", () => showChangelogForCurrent());
   refreshUpdateBanner(false);
   setInterval(()=> refreshUpdateBanner(false), 1000*60*30);
+}
+
+// ── Changelog: shows once per app version after each update ──
+function showChangelog(log) {
+  const ov = document.getElementById("changelog-overlay");
+  if (!ov || !log) return;
+  document.getElementById("changelog-title").textContent = log.title || `What's new in v${log.version}`;
+  document.getElementById("changelog-sub").textContent =
+    `${log.tag || ("v" + log.version)}${log.date ? " · " + new Date(log.date).toLocaleDateString() : ""}`;
+  document.getElementById("changelog-body").innerHTML =
+    log.notes ? mdLite(log.notes.slice(0, 8000)) : "<p>No notes for this release.</p>";
+  const close = () => {
+    ov.classList.add("hidden");
+    ov.setAttribute("aria-hidden", "true");
+    try { localStorage.setItem("meteor:changelogSeen", log.version); } catch {}
+  };
+  document.getElementById("changelog-ok").onclick = close;
+  document.getElementById("changelog-close").onclick = close;
+  document.getElementById("changelog-backdrop").onclick = close;
+  document.getElementById("changelog-view").onclick = async () => {
+    try { await window.meteorAPI.updater.openRepo(); } catch {}
+  };
+  ov.classList.remove("hidden");
+  ov.setAttribute("aria-hidden", "false");
+}
+
+async function showChangelogForCurrent() {
+  try {
+    if (!window.meteorAPI?.updater?.changelog) return;
+    const log = await window.meteorAPI.updater.changelog();
+    if (log && (log.notes || log.tag)) showChangelog(log);
+  } catch (e) { console.warn("changelog", e); }
+}
+
+async function maybeShowChangelog(currentVersion) {
+  try {
+    if (!currentVersion || !window.meteorAPI?.updater?.changelog) return;
+    let seen = null;
+    try { seen = localStorage.getItem("meteor:changelogSeen"); } catch {}
+    if (seen === currentVersion) return;
+    const log = await window.meteorAPI.updater.changelog();
+    if (!log || (!log.notes && !log.tag)) return; // fetch failed — retry next launch, don't mark seen
+    showChangelog(log);
+  } catch (e) { console.warn("changelog", e); }
 }
 
 async function init() {
@@ -3426,6 +3759,8 @@ async function init() {
   try { await checkAuth(); } catch(e){ console.error("checkAuth", e); }
 
   const info = await window.meteorAPI.info();
+  // changelog overlay (once per version, after updates)
+  try { await maybeShowChangelog(info.version); } catch (e) { console.warn("changelog", e); }
   // sync user UI from info.auth as well
   if (info.auth?.user) updateAuthUserUI(info.auth.user);
   else if (!currentUser) {
@@ -3528,16 +3863,32 @@ async function init() {
   }
 
   els.input.addEventListener("keydown", (e) => {
+    const popupOpen = mentionState && !document.getElementById("mention-popup")?.classList.contains("hidden");
+    if (popupOpen) {
+      if (e.key === "ArrowDown") { e.preventDefault(); e.stopImmediatePropagation(); mentionMove(1); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); e.stopImmediatePropagation(); mentionMove(-1); return; }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault(); e.stopImmediatePropagation();
+        if (mentionState.matches.length) acceptMention(mentionState.matches[mentionState.sel]);
+        else hideMentionPopup();
+        return;
+      }
+      if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); hideMentionPopup(); return; }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      hideMentionPopup();
       sendCurrent();
     }
   });
-  els.input.addEventListener("input", autoSizeInput);
+  els.input.addEventListener("input", () => { autoSizeInput(); updateMentionPopup(); });
+  els.input.addEventListener("blur", () => setTimeout(hideMentionPopup, 150));
   autoSizeInput();
 
   const clearChat = () => {
     chatHistory = [];
+    clearAttachedFiles();
+    hideMentionPopup();
     els.messages.innerHTML = "";
     els.messages.append(welcome);
     if (!info.hasKey) els.messages.append(document.querySelector(".banner")?.cloneNode(true) || Object.assign(document.createElement("div"), { className: "banner", textContent: "No API key found." }));
