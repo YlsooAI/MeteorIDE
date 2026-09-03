@@ -347,8 +347,10 @@ async function completeResponses(opts: CompletionOptions): Promise<CompletionRes
   const systemMessages = opts.messages.filter((m) => m.role === "system");
   const conversation = opts.messages.filter((m) => m.role !== "system");
   const allowedEffort = opts.reasoningEffort && (REASONING_EFFORTS as readonly string[]).includes(opts.reasoningEffort) ? opts.reasoningEffort : undefined;
+  // NOTE: send ONLY reasoning.effort — the top-level reasoning_effort param is rejected
+  // by newer models (e.g. muse-spark-1.3: "unknown parameter `reasoning_effort`").
   const reasoningPayload = allowedEffort
-      ? { reasoning: { effort: allowedEffort }, reasoning_effort: allowedEffort }
+      ? { reasoning: { effort: allowedEffort } }
       : {};
   const responsesTools = mcpToolsToResponsesTools(opts.tools);
   const input = conversation.map((m) => {

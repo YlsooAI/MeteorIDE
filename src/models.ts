@@ -23,7 +23,7 @@ export const MODELS: Record<string, MeteorModel> = {
     name: "Sunlight 2 Pro",
     zenId: "opencode/muse-spark-1.3-contributor-free",
     apiModel: "muse-spark-1.3-contributor-free",
-    protocol: "chat",
+    protocol: "responses",
     description: "Sunlight 2 Pro",
   },
 };
