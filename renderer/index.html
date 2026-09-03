@@ -82,7 +82,7 @@
 
       <div class="sb-footer">
         <div style="padding:6px 8px 4px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim2);border-top:1px solid #1e1e22;margin-top:6px">
-          <span id="update-footer-version" style="font-family:var(--mono)">v0.2.8</span>
+          <span id="update-footer-version" style="font-family:var(--mono)">v0.2.9</span>
           <span id="update-footer-status" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
           <button id="check-update-btn" title="Check for updates" style="font-size:11px;padding:3px 8px;border:1px solid #2a2a30;border-radius:6px;background:#1e1e22;color:var(--dim);cursor:pointer">Check</button>
         </div>
@@ -167,10 +167,12 @@
               <span class="dot dot-off" style="width:10px;height:10px;opacity:.5"></span>
               <select id="model-select" title="Select model"></select>
               <select id="reasoning-select" title="Reasoning effort">
-                <option value="">auto</option>
-                <option value="low">low</option>
-                <option value="high">high</option>
-                <option value="max">max</option>
+                <option value="">Default</option>
+                <option value="minimal">Minimal</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">XHigh</option>
               </select>
               <button id="send-btn" class="cc-send" title="Send" style="display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
             </div>

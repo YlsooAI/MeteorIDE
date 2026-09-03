@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
-import { MODELS, DEFAULT_MODEL, resolveModel, type MeteorModel } from "./models.js";
+import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS, type MeteorModel } from "./models.js";
 import { complete, ZenError, type Message } from "./zen.js";
 import { clearApiKey, loadConfig, resolveApiKey, resetConfig, saveConfig } from "./config.js";
 
@@ -46,7 +46,7 @@ Models
 
 Options
   -m, --model <model>    Model (sunlight-2 or sunlight-2-pro)
-  -r, --reasoning <effort> Reasoning effort (auto, low, high, max)
+  -r, --reasoning <effort> Reasoning effort (default, minimal, low, medium, high, xhigh)
   -s, --system <text>    Override the system prompt
       --api-key <key>    Use this key for one call (else METEOR_API_KEY / stored key)
       --no-stream        Wait for the full response instead of streaming
@@ -112,8 +112,9 @@ function requireKey(args: CliArgs): string {
 }
 
 async function runCompletion(args: CliArgs, messages: Message[], apiKey: string, model: MeteorModel): Promise<string> {
-  const allowed = ["low", "high", "max"];
-  const re = args.reasoningEffort && allowed.includes(args.reasoningEffort) ? args.reasoningEffort : undefined;
+  const allowed: string[] = [...REASONING_EFFORTS];
+  const norm = (args.reasoningEffort || "").toLowerCase();
+  const re = norm && norm !== "default" && norm !== "auto" && allowed.includes(norm) ? norm : undefined;
   const res = await complete(
     {
       apiKey,
@@ -237,15 +238,15 @@ async function chatLoop(args: CliArgs): Promise<void> {
       }
       if (line === "/reasoning" || line.startsWith("/reasoning ")) {
         const target = line.slice("/reasoning".length).trim().toLowerCase();
-        const allowed = ["", "auto", "low", "high", "max"];
+        const allowed = ["", "auto", "default", ...REASONING_EFFORTS];
         if (!target) {
-          console.log(`reasoning effort: ${reasoningEffort || "auto"} (available: ${allowed.filter(Boolean).join(", ")})\n`);
+          console.log(`reasoning effort: ${reasoningEffort || "default"} (available: ${allowed.filter(Boolean).join(", ")})\n`);
         } else if (!allowed.includes(target)) {
           console.log(`unknown reasoning "${target}". Available: ${allowed.filter(Boolean).join(", ")}\n`);
         } else {
-          reasoningEffort = target === "auto" ? "" : target;
+          reasoningEffort = target === "auto" || target === "default" ? "" : target;
           args.reasoningEffort = reasoningEffort;
-          console.log(`reasoning effort → ${reasoningEffort || "auto"}\n`);
+          console.log(`reasoning effort → ${reasoningEffort || "default"}\n`);
         }
         continue;
       }

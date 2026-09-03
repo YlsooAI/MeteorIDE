@@ -172,6 +172,14 @@ function esc(s) {
   return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
+// Canonical reasoning efforts (same for Sunlight 2 and Sunlight 2 Pro).
+// "" = Default (model default, nothing sent to the API).
+const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"];
+function effortLabel(e) {
+  if (!e || e === "auto" || e === "default") return "Default";
+  return e.charAt(0).toUpperCase() + e.slice(1);
+}
+
 const ICONS = {
   plus: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>`,
   close: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>`,
@@ -1887,7 +1895,7 @@ async function sendCurrent() {
     if (text === "/help") {
       els.input.value = "";
       autoSizeInput();
-      addMsg("system", "/model [name] — switch model (sunlight-2, sunlight-2-pro)\n/reasoning [auto|low|high|max] — set reasoning effort (current: " + (currentReasoningEffort || "auto") + ")\n/clear — clear chat\n/help — show this");
+      addMsg("system", "/model [name] — switch model (sunlight-2, sunlight-2-pro)\n/reasoning [default|minimal|low|medium|high|xhigh] — set reasoning effort (current: " + effortLabel(currentReasoningEffort) + ")\n/clear — clear chat\n/help — show this");
       return;
     }
     if (text === "/model" || text.startsWith("/model ")) {
@@ -1896,7 +1904,7 @@ async function sendCurrent() {
       autoSizeInput();
       if (!target) {
         const cur = models.find((m) => m.key === currentModel);
-        addMsg("system", `Current: ${cur ? `${cur.name}${cur.key === "sunlight-2-pro" ? " (Unlimited)" : ""}` : currentModel} (${currentModel}) · reasoning: ${currentReasoningEffort || "auto"}. Available models: ${models.map((m) => `${m.key} (${m.name}${m.key === "sunlight-2-pro" ? " (Unlimited)" : ""})`).join(", ")} · reasoning: auto, low, high, max`);
+        addMsg("system", `Current: ${cur ? `${cur.name}${cur.key === "sunlight-2-pro" ? " (Unlimited)" : ""}` : currentModel} (${currentModel}) · reasoning: ${effortLabel(currentReasoningEffort)}. Available models: ${models.map((m) => `${m.key} (${m.name}${m.key === "sunlight-2-pro" ? " (Unlimited)" : ""})`).join(", ")} · reasoning: default, ${REASONING_EFFORTS.join(", ")}`);
       } else {
         const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
         let f = models.find((m) => m.key.toLowerCase() === target.toLowerCase() || m.name.toLowerCase() === target.toLowerCase());
@@ -1905,7 +1913,7 @@ async function sendCurrent() {
           currentModel = f.key;
           els.modelSelect.value = currentModel;
           localStorage.setItem("meteor:chatModel", currentModel);
-          addMsg("system", `switched to ${f.name}${f.key === "sunlight-2-pro" ? " (Unlimited)" : ""} · reasoning: ${currentReasoningEffort || "auto"}`);
+          addMsg("system", `switched to ${f.name}${f.key === "sunlight-2-pro" ? " (Unlimited)" : ""} · reasoning: ${effortLabel(currentReasoningEffort)}`);
         } else {
           addMsg("system", `Unknown model "${target}". Available: ${models.map((m) => m.key).join(", ")}`);
         }
@@ -1916,18 +1924,18 @@ async function sendCurrent() {
       const target = text.slice("/reasoning".length).trim().toLowerCase();
       els.input.value = "";
       autoSizeInput();
-      const allowed = ["", "auto", "low", "high", "max"];
+      const allowed = ["", "auto", "default", ...REASONING_EFFORTS];
       if (!target) {
-        addMsg("system", `Reasoning effort: ${currentReasoningEffort || "auto"} (auto = model default). Available: ${allowed.filter(Boolean).join(", ")}`);
+        addMsg("system", `Reasoning effort: ${effortLabel(currentReasoningEffort)} (Default = model default). Available: ${allowed.filter(Boolean).join(", ")}`);
         if (els.reasoningSelect) els.reasoningSelect.focus();
       } else if (!allowed.includes(target)) {
         addMsg("system", `Unknown reasoning "${target}". Available: ${allowed.filter(Boolean).join(", ")}`);
       } else {
-        const next = target === "auto" ? "" : target;
+        const next = target === "auto" || target === "default" ? "" : target;
         currentReasoningEffort = next;
         localStorage.setItem("meteor:reasoningEffort", next);
         if (els.reasoningSelect) els.reasoningSelect.value = next;
-        addMsg("system", `reasoning effort → ${next || "auto"}`);
+        addMsg("system", `reasoning effort → ${effortLabel(next)}`);
       }
       return;
     }
@@ -1958,14 +1966,14 @@ async function sendCurrent() {
       }
     } catch(e){ console.warn("ensureProject", e); }
   }
-  const reasoningLabel = currentReasoningEffort ? ` · ${currentReasoningEffort}` : "";
+  const reasoningLabel = currentReasoningEffort ? ` · ${effortLabel(currentReasoningEffort)}` : "";
   const { wrap: assistantWrap, body } = addMsg("assistant", "", { label: currentModel + reasoningLabel, chatIndex: chatHistory.length });
   // reasoning container (hidden until first reasoning delta)
   const reasoningBox = document.createElement("div");
   reasoningBox.className = "reasoning hidden";
   const reasoningHead = document.createElement("button");
   reasoningHead.className = "reasoning-head";
-  reasoningHead.innerHTML = `<span class="reasoning-caret" style="display:inline-flex">${ICONS.chevronDown}</span><span class="reasoning-title">Reasoning</span><span class="reasoning-effort">${esc(currentReasoningEffort || "auto")}</span><span class="reasoning-status">thinking…</span>`;
+  reasoningHead.innerHTML = `<span class="reasoning-caret" style="display:inline-flex">${ICONS.chevronDown}</span><span class="reasoning-title">Reasoning</span><span class="reasoning-effort">${esc(effortLabel(currentReasoningEffort))}</span><span class="reasoning-status">thinking…</span>`;
   const reasoningBody = document.createElement("div");
   reasoningBody.className = "reasoning-body";
   reasoningBody.textContent = "";
@@ -3458,18 +3466,18 @@ async function init() {
     const m = models.find((x) => x.key === currentModel);
     const prevM = models.find((x) => x.key === prev);
     if (m && prev !== currentModel) {
-      const re = currentReasoningEffort ? ` · reasoning ${currentReasoningEffort}` : "";
+      const re = currentReasoningEffort ? ` · reasoning ${effortLabel(currentReasoningEffort)}` : "";
       addMsg("system", `switched to ${m.name}${m.key === "sunlight-2-pro" ? " (Unlimited)" : ""}${prevM ? ` from ${prevM.name}` : ""}${re}`);
     }
   });
 
   // reasoning effort — glassy select next to model
   const savedReasoning = localStorage.getItem("meteor:reasoningEffort") || "";
-  const allowedReasoning = ["", "low", "high", "max"];
+  const allowedReasoning = ["", ...REASONING_EFFORTS];
   if (allowedReasoning.includes(savedReasoning)) currentReasoningEffort = savedReasoning;
-  else if (savedReasoning === "minimal" || savedReasoning === "medium") {
-    // migrate old values: minimal→low, medium→high
-    currentReasoningEffort = savedReasoning === "minimal" ? "low" : "high";
+  else {
+    // migrate stale values (e.g. removed "max") back to Default
+    currentReasoningEffort = "";
     localStorage.setItem("meteor:reasoningEffort", currentReasoningEffort);
   }
   if (els.reasoningSelect) {
@@ -3478,7 +3486,7 @@ async function init() {
       const next = e.target.value;
       currentReasoningEffort = next;
       localStorage.setItem("meteor:reasoningEffort", next);
-      const label = next || "auto";
+      const label = effortLabel(next);
       addMsg("system", `reasoning effort → ${label}`);
     });
   }

@@ -1,4 +1,5 @@
 import type { Protocol } from "./models.js";
+import { REASONING_EFFORTS } from "./models.js";
 
 export const ZEN_BASE_URL = "https://opencode.ai/zen/v1";
 
@@ -17,7 +18,7 @@ export interface Message {
   name?: string;
 }
 
-export type ReasoningEffort = "auto" | "low" | "high" | "max" | "" | string;
+export type ReasoningEffort = "auto" | "default" | "minimal" | "low" | "medium" | "high" | "xhigh" | "" | string;
 
 export interface ToolDefinition {
   server: string;
@@ -185,7 +186,7 @@ function parseChatToolCalls(acc: Map<number, { id: string; name: string; argumen
 }
 
 async function completeChat(opts: CompletionOptions): Promise<CompletionResult> {
-  const allowedEffort = opts.reasoningEffort && ["low", "high", "max"].includes(opts.reasoningEffort) ? opts.reasoningEffort : undefined;
+  const allowedEffort = opts.reasoningEffort && (REASONING_EFFORTS as readonly string[]).includes(opts.reasoningEffort) ? opts.reasoningEffort : undefined;
   const reasoningPayload = allowedEffort
       ? { reasoning_effort: allowedEffort, reasoning: { effort: allowedEffort } }
       : {};
@@ -345,7 +346,7 @@ function mcpToolsToResponsesTools(tools?: ToolDefinition[]) {
 async function completeResponses(opts: CompletionOptions): Promise<CompletionResult> {
   const systemMessages = opts.messages.filter((m) => m.role === "system");
   const conversation = opts.messages.filter((m) => m.role !== "system");
-  const allowedEffort = opts.reasoningEffort && ["low", "high", "max"].includes(opts.reasoningEffort) ? opts.reasoningEffort : undefined;
+  const allowedEffort = opts.reasoningEffort && (REASONING_EFFORTS as readonly string[]).includes(opts.reasoningEffort) ? opts.reasoningEffort : undefined;
   const reasoningPayload = allowedEffort
       ? { reasoning: { effort: allowedEffort }, reasoning_effort: allowedEffort }
       : {};

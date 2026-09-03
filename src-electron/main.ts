@@ -5,7 +5,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { MODELS, DEFAULT_MODEL, resolveModel } from "../src/models.js";
+import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS } from "../src/models.js";
 import { complete, ZenError, type Message } from "../src/zen.js";
 import { loadMcpServers, saveMcpServers, validateMcpServers, type McpServerConfig } from "../src/config.js";
 import { resolveApiKey } from "../src/config.js";
@@ -208,7 +208,7 @@ ipcMain.handle(
       // gate: must be authenticated via Supabase (or mock) before using Meteor
       const authSess = await authGetSession().catch(() => ({ user: null }));
       if (!authSess.user) throw new Error("Not authenticated — please sign in to use Meteor.");
-      const allowed = ["low", "high", "max"];
+      const allowed: string[] = [...REASONING_EFFORTS];
       const reasoningEffort = payload.reasoningEffort && allowed.includes(payload.reasoningEffort) ? payload.reasoningEffort : undefined;
       // ── MCP: only expose tools if user explicitly mentions them ──
       // Checks last user message for "mcp", "@", "tool" or any configured server name.
