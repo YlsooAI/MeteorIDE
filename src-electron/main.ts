@@ -8,7 +8,9 @@ import { fileURLToPath } from "node:url";
 import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS } from "../src/models.js";
 import { complete, ZenError, type Message } from "../src/zen.js";
 import { loadMcpServers, saveMcpServers, validateMcpServers, type McpServerConfig } from "../src/config.js";
-import { resolveApiKey } from "../src/config.js";
+import { resolveApiKey, resolveMercuryKey, isUsingFreeTier } from "../src/config.js";
+import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, resetQuota, QuotaExceededError } from "../src/quota.js";
+import { WEB_TOOL_DEFINITIONS, executeWebTool } from "../src/web.js";
 import { scanWorkspace, writeFileInWorkspace } from "./workspace.js";
 import { authSignUp, authSignIn, authSignOut, authGetSession, authGetUser, isSupabaseConfigured, getProfileAvatar, getProfile, listProjects, createProject, getProject, updateProject, deleteProject, saveProjectMessages, loadProjectMessages } from "./supabase.js";
 
@@ -57,6 +59,7 @@ ipcMain.handle("meteor:info", async () => {
       key: m.key,
       name: m.name,
       description: m.description,
+      provider: m.provider,
     })),
     auth: {
       isAuthenticated: Boolean(sess.user),
@@ -150,12 +153,16 @@ ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string;
   const prompt = `Generate a short, concise chat title (3-6 words, no quotes, no period, Title Case, PLAIN TEXT ONLY — no markdown, no # symbols, no bold) that summarizes this conversation. Return ONLY the title, nothing else.\n\nUser: ${firstMsg}\n${firstResp ? `Assistant: ${firstResp}` : ""}`;
   const apiKey = resolveApiKey();
   if (!apiKey) throw new Error("No API key for title generation");
+  const isFree = isUsingFreeTier();
+  checkQuotaOrThrow(isFree);
   const proModel = resolveModel("sunlight-2-pro");
   try {
     const result = await complete({
       apiKey,
       apiModel: proModel.apiModel,
       protocol: proModel.protocol,
+      baseUrl: proModel.baseUrl,
+      provider: proModel.provider,
       messages: [
         { role: "system", content: "You are a title generator. Respond with only the title, 3-6 words, no quotes." } as Message,
         { role: "user", content: prompt } as Message,
@@ -163,6 +170,7 @@ ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string;
       stream: false,
       reasoningEffort: "low",
     });
+    if (result.usage) recordTokenUsage(result.usage.totalTokens, isFree);
     let title = (result.text || "").trim();
     // sanitize: strip markdown (## headings, **bold**, *italic*), quotes, newlines, trailing period, limit length
     title = title.replace(/^#{1,6}\s+/, "").replace(/^\*{1,3}\s*|\s*\*{1,3}$/g, "").replace(/^_{1,3}\s*|\s*_{1,3}$/g, "");
@@ -204,11 +212,16 @@ ipcMain.handle(
     const finish = () => { if (!settled) { settled = true; clearTimeout(overallWatchdog); } };
     try {
       const model = resolveModel(payload.modelKey ?? DEFAULT_MODEL);
-      const apiKey = resolveApiKey(payload.apiKey);
-      if (!apiKey) throw new Error("No API key found. Run `meteor auth set <key>` in the terminal or set METEOR_API_KEY.");
+      const isMercury = model.provider === "mercury";
+      const apiKey = isMercury ? resolveMercuryKey(payload.apiKey) : resolveApiKey(payload.apiKey);
+      if (!apiKey) throw new Error(isMercury ? "No Mercury API key found. Set MERCURY_API_KEY or add mercuryKey to ~/.config/meteor/config.json." : "No API key found. Run `meteor auth set <key>` in the terminal or set METEOR_API_KEY.");
       // gate: must be authenticated via Supabase (or mock) before using Meteor
       const authSess = await authGetSession().catch(() => ({ user: null }));
       if (!authSess.user) throw new Error("Not authenticated — please sign in to use Meteor.");
+
+      const isFree = isUsingFreeTier(payload.apiKey, model.provider);
+      checkQuotaOrThrow(isFree);
+
       const allowed: string[] = [...REASONING_EFFORTS];
       const reasoningEffort = payload.reasoningEffort && allowed.includes(payload.reasoningEffort) ? payload.reasoningEffort : undefined;
       // ── MCP: only expose tools if user explicitly mentions them ──
@@ -261,7 +274,7 @@ ipcMain.handle(
       } catch (e) {
         send("meteor:tool_info", { count: 0, tools: [], error: e instanceof Error ? e.message : String(e) });
       }
-      const toolDefs = mcpTools;
+      const toolDefs = [...WEB_TOOL_DEFINITIONS, ...mcpTools];
       let messages: any[] = [...payload.messages];
       let finalText = "";
       let finalReasoning = "";
@@ -271,6 +284,8 @@ ipcMain.handle(
           apiKey,
           apiModel: model.apiModel,
           protocol: model.protocol,
+          baseUrl: model.baseUrl,
+          provider: model.provider,
           messages,
           stream: true,
           reasoningEffort,
@@ -281,20 +296,29 @@ ipcMain.handle(
         });
         finalText = result.text;
         if (result.reasoning) finalReasoning = finalReasoning ? finalReasoning + "\n" + result.reasoning : result.reasoning;
+        if (result.usage) recordTokenUsage(result.usage.totalTokens, isFree);
         if (result.toolCalls.length === 0) break;
         // Notify renderer of tool calls
         for (const tc of result.toolCalls) {
           send("meteor:tool_call", { id: tc.id, server: tc.server, tool: tc.toolName, name: tc.name, arguments: tc.arguments, parsedArgs: tc.parsedArgs });
         }
-        // Execute MCP tools (each capped at 60s so a wedged server can't freeze the chat)
-        const { callMcpTool } = await import("./mcp-client.js");
+        // Execute tools (web tools or MCP tools, each capped with timeout)
         const toolResults: Array<{ tool_call_id: string; content: string }> = [];
         for (const tc of result.toolCalls) {
           try {
-            const res = await withTimeout(callMcpTool(tc.server, tc.toolName, tc.parsedArgs ?? {}, termCwd), 60000, `Tool ${tc.server}.${tc.toolName}`);
-            const text = (res.content ?? []).map((c: { text?: string }) => c.text ?? "").join("\n") || JSON.stringify(res, null, 2);
+            let text = "";
+            let isError = false;
+            if (tc.server === "web" || tc.toolName === "fetch_url" || tc.toolName === "search_internet") {
+              text = await withTimeout(executeWebTool(tc.toolName, tc.parsedArgs), 30000, `Web tool ${tc.toolName}`);
+              isError = text.startsWith("Error:") || text.startsWith("Failed to fetch");
+            } else {
+              const { callMcpTool } = await import("./mcp-client.js");
+              const res = await withTimeout(callMcpTool(tc.server, tc.toolName, tc.parsedArgs ?? {}, termCwd), 60000, `Tool ${tc.server}.${tc.toolName}`);
+              text = (res.content ?? []).map((c: { text?: string }) => c.text ?? "").join("\n") || JSON.stringify(res, null, 2);
+              isError = !!res.isError;
+            }
             toolResults.push({ tool_call_id: tc.id, content: text });
-            send("meteor:tool_result", { id: tc.id, server: tc.server, tool: tc.toolName, result: text, isError: !!res.isError });
+            send("meteor:tool_result", { id: tc.id, server: tc.server, tool: tc.toolName, result: text, isError });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             toolResults.push({ tool_call_id: tc.id, content: `Error: ${msg}` });
@@ -314,20 +338,34 @@ ipcMain.handle(
         // If model returned tool calls but no text, continue loop to get final answer
         if (iter === 5) break;
       }
-      send("meteor:done", { text: finalText, reasoning: finalReasoning || undefined });
+      send("meteor:done", {
+        text: finalText,
+        reasoning: finalReasoning || undefined,
+        quota: getQuotaStatus(isFree),
+      });
       finish();
     } catch (err) {
       const msg =
-        err instanceof ZenError && err.status === 401
-          ? "Unauthorized — check your API key"
-          : err instanceof Error
-            ? err.message
-            : String(err);
+        err instanceof QuotaExceededError
+          ? `Quota exceeded: ${err.message}`
+          : err instanceof ZenError && err.status === 401
+            ? "Unauthorized — check your API key"
+            : err instanceof Error
+              ? err.message
+              : String(err);
       send("meteor:error", msg);
       finish();
     }
   },
 );
+
+ipcMain.handle("quota:getStatus", async () => {
+  return getQuotaStatus(isUsingFreeTier());
+});
+
+ipcMain.handle("quota:reset", async () => {
+  return resetQuota();
+});
 
 let termCwd = process.cwd();
 let currentTermProc: ChildProcessWithoutNullStreams | null = null;

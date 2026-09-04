@@ -3,11 +3,13 @@ import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
 import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS, type MeteorModel } from "./models.js";
 import { complete, ZenError, type Message } from "./zen.js";
-import { clearApiKey, loadConfig, resolveApiKey, resetConfig, saveConfig } from "./config.js";
+import { clearApiKey, loadConfig, resolveApiKey, resolveMercuryKey, resetConfig, saveConfig, isUsingFreeTier, saveBrowserbaseKey, resolveBrowserbaseKey } from "./config.js";
+import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, formatTimeRemaining, QuotaExceededError } from "./quota.js";
+import { WEB_TOOL_DEFINITIONS, executeWebTool } from "./web.js";
 
 const VERSION = "0.2.0";
 const DEFAULT_SYSTEM =
-  "You are Meteor, a helpful assistant. Answer concisely. You can use full markdown: headings, bold, italic, lists, tables, blockquotes, links, and fenced code blocks with language tags. Prefer markdown for structure and readability.";
+  "You are Meteor, a helpful assistant. Answer concisely. You can use full markdown: headings, bold, italic, lists, tables, blockquotes, links, and fenced code blocks with language tags. Prefer markdown for structure and readability.\n\nYou have built-in web tools:\n- fetch_url: fetch the live readable text or markdown content of any URL or link the user provides or asks about.\n- search_internet: search the internet via Browserbase to find up-to-date documentation, news, facts, and code examples whenever current information is needed. Use it proactively whenever fresh context is required.";
 
 interface CliArgs {
   model?: string;
@@ -26,12 +28,14 @@ const USAGE = `Meteor — AI in your terminal
 Usage
   meteor [prompt...]              One-shot question (streams the answer)
   meteor chat [-m <model>]        Interactive session
+  meteor quota                    Show your free tier quota usage (1M tokens / 5h)
   meteor build                    Build the project (emits to dist/)
   meteor plan                     Plan the build — preview without writing files
   meteor models                   List available models
-  meteor auth set <api-key>       Store your API key
-  meteor auth show                Show where the API key comes from
-  meteor auth clear               Remove stored API key
+  meteor auth set <api-key>             Store your API key
+  meteor auth set-browserbase <bb-key>  Store Browserbase API key (for live web search)
+  meteor auth show                      Show where the API keys come from
+  meteor auth clear                     Remove stored API key
 
 Modes
   Build   actually writes files (code + dist)
@@ -60,7 +64,7 @@ Environment
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { stream: true, prompt: [], help: false, version: false };
   const rest = [...argv];
-  if (rest.length > 0 && !rest[0].startsWith("-") && ["chat", "models", "auth", "help", "build", "plan"].includes(rest[0])) {
+  if (rest.length > 0 && !rest[0].startsWith("-") && ["chat", "models", "auth", "help", "build", "plan", "quota"].includes(rest[0])) {
     args.command = rest.shift();
   }
   while (rest.length > 0) {
@@ -100,36 +104,91 @@ function parseArgs(argv: string[]): CliArgs {
   return args;
 }
 
-function requireKey(args: CliArgs): string {
-  const key = resolveApiKey(args.apiKey);
+function requireKey(args: CliArgs, model?: MeteorModel): string {
+  const isMercury = model?.provider === "mercury";
+  const key = isMercury ? resolveMercuryKey(args.apiKey) : resolveApiKey(args.apiKey);
   if (!key) {
-    console.error(
-      "No API key found. Set METEOR_API_KEY, or run:\n  meteor auth set <your-key>",
-    );
+    if (isMercury) {
+      console.error(
+        "No Mercury API key found. Set MERCURY_API_KEY, or add mercuryKey to ~/.config/meteor/config.json",
+      );
+    } else {
+      console.error(
+        "No API key found. Set METEOR_API_KEY, or run:\n  meteor auth set <your-key>",
+      );
+    }
     process.exit(1);
   }
   return key;
 }
 
 async function runCompletion(args: CliArgs, messages: Message[], apiKey: string, model: MeteorModel): Promise<string> {
+  const isFree = isUsingFreeTier(args.apiKey, model.provider);
+  checkQuotaOrThrow(isFree);
+
   const allowed: string[] = [...REASONING_EFFORTS];
   const norm = (args.reasoningEffort || "").toLowerCase();
   const re = norm && norm !== "default" && norm !== "auto" && allowed.includes(norm) ? norm : undefined;
-  const res = await complete(
-    {
+
+  let currentMessages: any[] = [...messages];
+  let finalText = "";
+
+  for (let iter = 0; iter < 5; iter++) {
+    const res = await complete({
       apiKey,
       apiModel: model.apiModel,
       protocol: model.protocol,
-      messages,
+      baseUrl: model.baseUrl,
+      provider: model.provider,
+      messages: currentMessages,
       stream: args.stream,
       reasoningEffort: re,
+      tools: WEB_TOOL_DEFINITIONS,
       onDelta: (text) => process.stdout.write(text),
-    },
-  );
-  if (res.toolCalls.length > 0) {
-    process.stdout.write(`\n\n[tool calls: ${res.toolCalls.map((t) => `${t.server}.${t.toolName}`).join(", ")}]\n`);
+    });
+
+    recordTokenUsage(res.usage.totalTokens, isFree);
+    finalText = res.text;
+
+    if (res.toolCalls.length === 0) {
+      break;
+    }
+
+    const toolResults: Array<{ tool_call_id: string; content: string }> = [];
+    for (const tc of res.toolCalls) {
+      const parsedArgs: any = tc.parsedArgs ?? (() => {
+        try { return JSON.parse(tc.arguments || "{}"); } catch { return {}; }
+      })();
+
+      if (tc.toolName === "search_internet" || tc.name.endsWith("search_internet")) {
+        process.stdout.write(`\n\x1b[35m🔍 [search_internet] "${parsedArgs?.query || ""}"\x1b[0m\n`);
+      } else if (tc.toolName === "fetch_url" || tc.name.endsWith("fetch_url")) {
+        process.stdout.write(`\n\x1b[36m🌐 [fetch_url] ${parsedArgs?.url || ""}\x1b[0m\n`);
+      } else {
+        process.stdout.write(`\n\x1b[33m⚡ [${tc.toolName}]\x1b[0m\n`);
+      }
+
+      try {
+        const text = await executeWebTool(tc.toolName, parsedArgs);
+        toolResults.push({ tool_call_id: tc.id, content: text });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        toolResults.push({ tool_call_id: tc.id, content: `Error: ${msg}` });
+      }
+    }
+
+    currentMessages = [
+      ...currentMessages,
+      {
+        role: "assistant",
+        content: res.text || "",
+        tool_calls: res.toolCalls.map((tc) => ({ id: tc.id, type: "function", function: { name: tc.name, arguments: tc.arguments } })),
+      } as unknown as Message,
+      ...toolResults.map((tr) => ({ role: "tool", tool_call_id: tr.tool_call_id, content: tr.content } as unknown as Message)),
+    ];
   }
-  return res.text;
+
+  return finalText;
 }
 
 function renderAnsi(md: string): string {
@@ -160,8 +219,8 @@ function renderAnsi(md: string): string {
 }
 
 async function askOnce(args: CliArgs): Promise<void> {
-  const apiKey = requireKey(args);
   const model = resolveModel(args.model ?? loadConfig().defaultModel);
+  const apiKey = requireKey(args, model);
   const prompt = args.prompt.join(" ").trim();
   if (!prompt) throw new Error("Provide a prompt, e.g. meteor \"explain event loops\"");
   const messages: Message[] = [
@@ -176,8 +235,8 @@ async function askOnce(args: CliArgs): Promise<void> {
 }
 
 async function chatLoop(args: CliArgs): Promise<void> {
-  const apiKey = requireKey(args);
   const model = resolveModel(args.model ?? loadConfig().defaultModel);
+  const apiKey = requireKey(args, model);
   let reasoningEffort = args.reasoningEffort ?? "";
   const reLabel = () => reasoningEffort ? ` · reasoning ${reasoningEffort}` : "";
   console.log(`Meteor chat — ${model.name}${reLabel()}`);
@@ -250,8 +309,12 @@ async function chatLoop(args: CliArgs): Promise<void> {
         }
         continue;
       }
+      if (line === "/quota") {
+        showQuotaAction();
+        continue;
+      }
       if (line === "/help") {
-        console.log("/exit /clear /model [name] /reasoning [effort] /help\n");
+        console.log("/exit /clear /model [name] /reasoning [effort] /quota /help\n");
         continue;
       }
       history.push({ role: "user", content: line });
@@ -274,6 +337,37 @@ async function chatLoop(args: CliArgs): Promise<void> {
     }
   } finally {
     rl.close();
+  }
+}
+
+function showQuotaAction(): void {
+  const isFree = isUsingFreeTier();
+  const status = getQuotaStatus(isFree);
+
+  const barWidth = 24;
+  const filled = Math.min(barWidth, Math.round((status.used / status.limit) * barWidth));
+  const empty = barWidth - filled;
+  const bar = `[${"█".repeat(filled)}${"░".repeat(empty)}]`;
+  const resetDate = new Date(status.resetAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const timeLeft = formatTimeRemaining(status.resetsInMs);
+
+  console.log(`\n\x1b[1m\x1b[35mMeteor Free Quota\x1b[0m`);
+  console.log(`\x1b[90m${"─".repeat(45)}\x1b[0m`);
+  if (!isFree) {
+    console.log(`  Tier:        \x1b[32mCustom API Key (Unlimited)\x1b[0m`);
+    console.log(`  Allowance:   Unlimited (bypasses free 1M/5h quota)`);
+  } else {
+    console.log(`  Tier:        \x1b[36mFree Tier (1,000,000 tokens / 5 hours)\x1b[0m`);
+  }
+  console.log(`  Usage:       \x1b[1m${status.used.toLocaleString()} / ${status.limit.toLocaleString()}\x1b[0m tokens (${status.percentUsed}%)`);
+  console.log(`  Progress:    \x1b[33m${bar}\x1b[0m`);
+  console.log(`  Remaining:   \x1b[1m${status.remaining.toLocaleString()}\x1b[0m tokens`);
+  console.log(`  Resets in:   \x1b[33m${timeLeft}\x1b[0m (at ${resetDate})`);
+  if (status.isExceeded) {
+    console.log(`\n\x1b[31m⚠ Quota limit reached for this 5-hour window. Wait for reset or configure your own key:\x1b[0m`);
+    console.log(`  meteor auth set <your-api-key>\n`);
+  } else {
+    console.log();
   }
 }
 
@@ -306,13 +400,21 @@ async function authAction(sub: string | undefined, value: string | undefined): P
       console.log("API key saved to ~/.config/meteor/config.json");
       return;
     }
+    case "set-browserbase": {
+      if (!value) throw new Error("Usage: meteor auth set-browserbase <browserbase-api-key>");
+      saveBrowserbaseKey(value);
+      console.log("Browserbase API key saved to ~/.config/meteor/config.json");
+      return;
+    }
     case "show": {
       const source = process.env.METEOR_API_KEY || process.env.OPENCODE_API_KEY
         ? "environment (METEOR_API_KEY/OPENCODE_API_KEY)"
         : loadConfig().apiKey
           ? "~/.config/meteor/config.json"
           : "not configured";
-      console.log(`API key source: ${source}`);
+      const bbSource = resolveBrowserbaseKey() ? "configured" : "not configured (using DuckDuckGo fallback)";
+      console.log(`API key source:  ${source}`);
+      console.log(`Browserbase key: ${bbSource}`);
       return;
     }
     case "clear": {
@@ -320,7 +422,7 @@ async function authAction(sub: string | undefined, value: string | undefined): P
       return;
     }
     default:
-      throw new Error("Usage: meteor auth <set|show|clear> [args]");
+      throw new Error("Usage: meteor auth <set|set-browserbase|show|clear> [args]");
   }
 }
 
@@ -333,6 +435,8 @@ async function main(): Promise<void> {
     switch (args.command) {
       case "chat":
         return await chatLoop(args);
+      case "quota":
+        return showQuotaAction();
       case "build":
         return runBuild(false);
       case "plan":
@@ -346,7 +450,9 @@ async function main(): Promise<void> {
         return await askOnce(args);
     }
   } catch (err) {
-    if (err instanceof ZenError && err.status === 401) {
+    if (err instanceof QuotaExceededError) {
+      console.error(`\x1b[31mQuota Exceeded:\x1b[0m ${err.message}`);
+    } else if (err instanceof ZenError && err.status === 401) {
       console.error("error: Unauthorized — check your API key");
     } else if (err instanceof Error) {
       console.error(`error: ${err.message}`);

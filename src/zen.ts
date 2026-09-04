@@ -36,16 +36,46 @@ export interface ToolCall {
   parsedArgs?: unknown;
 }
 
+export interface CompletionUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
 export interface CompletionResult {
   text: string;
   reasoning?: string;
   toolCalls: ToolCall[];
+  usage: CompletionUsage;
+}
+
+export function estimateTokens(messages: Message[], outputText: string, reasoningText?: string): CompletionUsage {
+  let promptChars = 0;
+  for (const m of messages) {
+    if (typeof m.content === "string") {
+      promptChars += m.content.length;
+    } else if (Array.isArray(m.content)) {
+      for (const p of m.content) {
+        if ("text" in p && typeof p.text === "string") promptChars += p.text.length;
+      }
+    }
+  }
+  const completionChars = (outputText?.length || 0) + (reasoningText?.length || 0);
+  const promptTokens = Math.max(1, Math.ceil(promptChars / 4));
+  const completionTokens = Math.max(1, Math.ceil(completionChars / 4));
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+  };
 }
 
 export interface CompletionOptions {
   apiKey: string;
   apiModel: string;
   protocol: Protocol;
+  baseUrl?: string;
+  provider?: string;
   messages: (Message & { tool_call_id?: string; name?: string; tool_calls?: unknown })[];
   stream?: boolean;
   signal?: AbortSignal;
@@ -187,7 +217,8 @@ function parseChatToolCalls(acc: Map<number, { id: string; name: string; argumen
 
 async function completeChat(opts: CompletionOptions): Promise<CompletionResult> {
   const allowedEffort = opts.reasoningEffort && (REASONING_EFFORTS as readonly string[]).includes(opts.reasoningEffort) ? opts.reasoningEffort : undefined;
-  const reasoningPayload = allowedEffort
+  // Mercury (Inception) rejects unknown reasoning params — only send effort for Zen.
+  const reasoningPayload = opts.provider !== "mercury" && allowedEffort
       ? { reasoning_effort: allowedEffort, reasoning: { effort: allowedEffort } }
       : {};
   const chatTools = mcpToolsToChatTools(opts.tools);
@@ -202,9 +233,10 @@ async function completeChat(opts: CompletionOptions): Promise<CompletionResult> 
     return m;
   });
   const guard = makeStreamGuard(opts.signal);
+  const baseUrl = (opts.baseUrl || ZEN_BASE_URL).replace(/\/$/, "");
   let res: Response;
   try {
-    res = await fetch(`${ZEN_BASE_URL}/chat/completions`, {
+    res = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -214,6 +246,7 @@ async function completeChat(opts: CompletionOptions): Promise<CompletionResult> 
         model: opts.apiModel,
         messages,
         stream: opts.stream !== false,
+        ...(opts.stream !== false ? { stream_options: { include_usage: true } } : {}),
         ...(chatTools ? { tools: chatTools, tool_choice: "auto" } : {}),
         ...reasoningPayload,
       }),
@@ -230,6 +263,7 @@ async function completeChat(opts: CompletionOptions): Promise<CompletionResult> 
     if (opts.stream === false) {
       const json = (await res.json()) as {
         choices?: Array<{ message?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string }; type: string }> } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       };
       const msg = json.choices?.[0]?.message as { content?: string | null; reasoning?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string }; type: string }> } | undefined;
       const text = msg?.content ?? "";
@@ -248,11 +282,20 @@ async function completeChat(opts: CompletionOptions): Promise<CompletionResult> 
         };
       });
       if (text) opts.onDelta?.(text);
-      return { text, reasoning, toolCalls };
+      const rawU = json.usage;
+      const usage: CompletionUsage = rawU && (rawU.total_tokens || rawU.prompt_tokens)
+        ? {
+            promptTokens: rawU.prompt_tokens ?? 0,
+            completionTokens: rawU.completion_tokens ?? 0,
+            totalTokens: rawU.total_tokens ?? ((rawU.prompt_tokens ?? 0) + (rawU.completion_tokens ?? 0)),
+          }
+        : estimateTokens(opts.messages, text, reasoning);
+      return { text, reasoning, toolCalls, usage };
     }
 
     let out = "";
     let reasoningOut = "";
+    let streamUsage: CompletionUsage | null = null;
     const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
     for await (const data of sseDataEvents(res, () => guard.resetIdle())) {
       guard.resetIdle();
@@ -269,11 +312,19 @@ async function completeChat(opts: CompletionOptions): Promise<CompletionResult> 
         message?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null };
         finish_reason?: string | null;
       }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
     };
     try {
       chunk = JSON.parse(data);
     } catch {
       continue;
+    }
+    if (chunk.usage && (chunk.usage.total_tokens || chunk.usage.prompt_tokens)) {
+      streamUsage = {
+        promptTokens: chunk.usage.prompt_tokens ?? 0,
+        completionTokens: chunk.usage.completion_tokens ?? 0,
+        totalTokens: chunk.usage.total_tokens ?? ((chunk.usage.prompt_tokens ?? 0) + (chunk.usage.completion_tokens ?? 0)),
+      };
     }
     const choice = chunk.choices?.[0];
     if (!choice) continue;
@@ -324,7 +375,8 @@ async function completeChat(opts: CompletionOptions): Promise<CompletionResult> 
       parsedArgs: (() => { try { return JSON.parse(v.arguments || "{}"); } catch { return v.arguments; } })(),
     });
   }
-  return { text: out, reasoning: reasoningOut || undefined, toolCalls };
+  const usage: CompletionUsage = streamUsage ?? estimateTokens(opts.messages, out, reasoningOut);
+  return { text: out, reasoning: reasoningOut || undefined, toolCalls, usage };
   } catch (e) {
     if (guard.aborted() && !(e instanceof ApiError)) throw streamAbortError(guard);
     throw e;
@@ -449,21 +501,38 @@ async function completeResponses(opts: CompletionOptions): Promise<CompletionRes
       }
     }
     if (text) opts.onDelta?.(text);
-    return { text, reasoning, toolCalls };
+    const rawUsage = (json as { usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number; prompt_tokens?: number; completion_tokens?: number } }).usage;
+    const usage: CompletionUsage = rawUsage && (rawUsage.total_tokens || rawUsage.input_tokens || rawUsage.prompt_tokens)
+      ? {
+          promptTokens: rawUsage.input_tokens ?? rawUsage.prompt_tokens ?? 0,
+          completionTokens: rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0,
+          totalTokens: rawUsage.total_tokens ?? ((rawUsage.input_tokens ?? rawUsage.prompt_tokens ?? 0) + (rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0)),
+        }
+      : estimateTokens(opts.messages, text, reasoning);
+    return { text, reasoning, toolCalls, usage };
   }
 
   let out = "";
   let reasoningOut = "";
+  let streamUsage: CompletionUsage | null = null;
   const toolAcc = new Map<string, { name: string; arguments: string; id: string }>();
   // For responses, tool calls may come as events
   for await (const data of sseDataEvents(res, () => guard.resetIdle())) {
     guard.resetIdle();
     if (!data || data === "[DONE]") continue;
-    let event: { type?: string; delta?: unknown; text?: string; summary?: string; reasoning?: string; name?: string; arguments?: string; call_id?: string; output_index?: number; item?: unknown; content?: unknown };
+    let event: { type?: string; delta?: unknown; text?: string; summary?: string; reasoning?: string; name?: string; arguments?: string; call_id?: string; output_index?: number; item?: unknown; content?: unknown; usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number; prompt_tokens?: number; completion_tokens?: number }; response?: { usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number; prompt_tokens?: number; completion_tokens?: number } } };
     try {
       event = JSON.parse(data);
     } catch {
       continue;
+    }
+    const rawU = event.usage || event.response?.usage;
+    if (rawU && (rawU.total_tokens || rawU.input_tokens || rawU.prompt_tokens)) {
+      streamUsage = {
+        promptTokens: rawU.input_tokens ?? rawU.prompt_tokens ?? 0,
+        completionTokens: rawU.output_tokens ?? rawU.completion_tokens ?? 0,
+        totalTokens: rawU.total_tokens ?? ((rawU.input_tokens ?? rawU.prompt_tokens ?? 0) + (rawU.output_tokens ?? rawU.completion_tokens ?? 0)),
+      };
     }
     if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
       out += event.delta;
@@ -529,7 +598,8 @@ async function completeResponses(opts: CompletionOptions): Promise<CompletionRes
       parsedArgs: (() => { try { return JSON.parse(v.arguments || "{}"); } catch { return v.arguments; } })(),
     });
   }
-  return { text: out, reasoning: reasoningOut || undefined, toolCalls };
+  const usage: CompletionUsage = streamUsage ?? estimateTokens(opts.messages, out, reasoningOut);
+  return { text: out, reasoning: reasoningOut || undefined, toolCalls, usage };
   } catch (e) {
     if (guard.aborted() && !(e instanceof ApiError)) throw streamAbortError(guard);
     throw e;

@@ -1,4 +1,5 @@
 export type Protocol = "chat" | "responses";
+export type Provider = "zen" | "mercury";
 
 export interface MeteorModel {
   key: string;
@@ -6,6 +7,8 @@ export interface MeteorModel {
   zenId: string;
   apiModel: string;
   protocol: Protocol;
+  provider: Provider;
+  baseUrl?: string;
   description: string;
 }
 
@@ -16,6 +19,7 @@ export const MODELS: Record<string, MeteorModel> = {
     zenId: "opencode/muse-spark-1.2-contributor-free",
     apiModel: "muse-spark-1.2-contributor-free",
     protocol: "responses",
+    provider: "zen",
     description: "Sunlight 2",
   },
   "sunlight-2-pro": {
@@ -24,7 +28,18 @@ export const MODELS: Record<string, MeteorModel> = {
     zenId: "opencode/muse-spark-1.3-contributor-free",
     apiModel: "muse-spark-1.3-contributor-free",
     protocol: "responses",
+    provider: "zen",
     description: "Sunlight 2 Pro",
+  },
+  "sunlight-2-lite": {
+    key: "sunlight-2-lite",
+    name: "Sunlight 2 Lite",
+    zenId: "inception/mercury-2.5-preview",
+    apiModel: "mercury-2",
+    protocol: "chat",
+    provider: "mercury",
+    baseUrl: "https://api.inceptionlabs.ai/v1",
+    description: "Sunlight 2 Lite",
   },
 };
 

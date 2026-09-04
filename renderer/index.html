@@ -81,8 +81,24 @@
       <div class="spacer"></div>
 
       <div class="sb-footer">
-        <div style="padding:6px 8px 4px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim2);border-top:1px solid #1e1e22;margin-top:6px">
-          <span id="update-footer-version" title="Show what's new" style="font-family:var(--mono);cursor:pointer">v0.2.12</span>
+        <div id="sb-quota" style="padding:8px 10px 6px;border-top:1px solid #1e1e22;margin-top:6px;display:flex;flex-direction:column;gap:4px;cursor:pointer" title="Meteor Token Quota (1M tokens / 5h)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--text)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff6a2a" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <span id="quota-tier-label">Free Quota</span>
+            </span>
+            <span id="quota-reset-label" style="font-size:10px;color:var(--dim2)">5h window</span>
+          </div>
+          <div style="height:5px;background:#232328;border-radius:3px;overflow:hidden;margin:1px 0">
+            <div id="quota-bar" style="height:100%;width:0%;background:linear-gradient(90deg, #ff6a2a, #ff9f43);border-radius:3px;transition:width .3s ease"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim2)">
+            <span id="quota-usage-text">0 / 1M tokens</span>
+            <span id="quota-percent-text">0%</span>
+          </div>
+        </div>
+        <div style="padding:6px 8px 4px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim2);border-top:1px solid #1e1e22;margin-top:2px">
+          <span id="update-footer-version" title="Show what's new" style="font-family:var(--mono);cursor:pointer">v0.2.14</span>
           <span id="update-footer-status" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
           <button id="check-update-btn" title="Check for updates" style="font-size:11px;padding:3px 8px;border:1px solid #2a2a30;border-radius:6px;background:#1e1e22;color:var(--dim);cursor:pointer">Check</button>
         </div>

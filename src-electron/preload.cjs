@@ -114,4 +114,8 @@ contextBridge.exposeInMainWorld("meteorAPI", {
     openRepo: () => ipcRenderer.invoke("updater:openRepo"),
     restart: () => ipcRenderer.invoke("app:restart"),
   },
+  quota: {
+    getStatus: () => ipcRenderer.invoke("quota:getStatus"),
+    reset: () => ipcRenderer.invoke("quota:reset"),
+  },
 });

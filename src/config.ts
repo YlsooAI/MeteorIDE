@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 // Embedded keys for distributed builds (.exe/.dmg) — users will use our keys
 export const EMBEDDED_API_KEY = "sk-qgeusPXxBRNxeblGvbMbFETpNJzZc3MFl7zO6dARiB694CwDvxDhzaXVfhN2Jx1c";
+export const EMBEDDED_MERCURY_KEY = "sk_5766b0857b05f8b35566ffc42e55e7bc";
+export const EMBEDDED_BROWSERBASE_API_KEY = "bb_live_MXTt6FP2BJ5RKgtOr4gezAvQL2g";
 export const EMBEDDED_SUPABASE_URL = "https://ikjugnimawkoatkbvpgk.supabase.co";
 export const EMBEDDED_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlranVnbmltYXdrb2F0a2J2cGdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNzI3OTAsImV4cCI6MjA5NTY0ODc5MH0.xr9B_khj2zKIEoUsTisL66SGgn8Yo2K0YH5YDw0QmQw";
 
@@ -23,13 +25,15 @@ export type McpServers = Record<string, McpServerConfig>;
 
 export interface MeteorConfig {
   apiKey?: string;
+  mercuryKey?: string;
+  browserbaseApiKey?: string;
   defaultModel?: string;
   mcpServers?: McpServers;
   supabaseUrl?: string;
   supabaseAnonKey?: string;
 }
 
-function configDir(): string {
+export function configDir(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
   return xdg ? join(xdg, "meteor") : join(homedir(), ".config", "meteor");
 }
@@ -76,6 +80,41 @@ export function resolveApiKey(cliKey?: string): string | undefined {
     loadConfig().apiKey ??
     EMBEDDED_API_KEY
   );
+}
+
+export function resolveMercuryKey(cliKey?: string): string | undefined {
+  return (
+    cliKey ??
+    process.env.MERCURY_API_KEY ??
+    loadConfig().mercuryKey ??
+    EMBEDDED_MERCURY_KEY
+  );
+}
+
+export function resolveBrowserbaseKey(cliKey?: string): string | undefined {
+  return (
+    cliKey ??
+    process.env.BROWSERBASE_API_KEY ??
+    process.env.BROWSERBASE_KEY ??
+    loadConfig().browserbaseApiKey ??
+    EMBEDDED_BROWSERBASE_API_KEY
+  );
+}
+
+export function saveBrowserbaseKey(key: string): void {
+  saveConfig({ browserbaseApiKey: key });
+}
+
+export function isUsingFreeTier(cliKey?: string, provider?: string): boolean {
+  if (cliKey) return false;
+  if (provider === "mercury") {
+    if (process.env.MERCURY_API_KEY) return false;
+    const cfg = loadConfig();
+    return !cfg.mercuryKey;
+  }
+  if (process.env.METEOR_API_KEY || process.env.OPENCODE_API_KEY) return false;
+  const cfg = loadConfig();
+  return !cfg.apiKey;
 }
 
 export function loadMcpServers(): McpServers {

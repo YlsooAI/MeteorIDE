@@ -211,9 +211,12 @@ export async function getProfileAvatar(userId: string): Promise<string | null> {
   const client = getSupabaseClient();
   if (!client) return null;
   try {
-    const { data, error } = await client.from("profiles").select("avatar_url").eq("id", userId).maybeSingle();
-    if (error) return null;
-    const url = (data as { avatar_url?: string | null })?.avatar_url;
+    let res = await client.from("meteor_profiles").select("avatar_url").eq("id", userId).maybeSingle();
+    if (res.error && res.error.message.includes("Could not find the table")) {
+      res = await client.from("profiles").select("avatar_url").eq("id", userId).maybeSingle();
+    }
+    if (res.error) return null;
+    const url = (res.data as { avatar_url?: string | null })?.avatar_url;
     return url && typeof url === "string" && url.trim() ? url.trim() : null;
   } catch { return null; }
 }
@@ -222,9 +225,12 @@ export async function getProfile(userId: string): Promise<{ avatarUrl: string | 
   const client = getSupabaseClient();
   if (!client) return { avatarUrl: null, fullName: null };
   try {
-    const { data, error } = await client.from("profiles").select("avatar_url, full_name, username").eq("id", userId).maybeSingle();
-    if (error) return { avatarUrl: null, fullName: null };
-    const row = data as { avatar_url?: string | null; full_name?: string | null; username?: string | null } | null;
+    let res = await client.from("meteor_profiles").select("avatar_url, full_name, username").eq("id", userId).maybeSingle();
+    if (res.error && res.error.message.includes("Could not find the table")) {
+      res = await client.from("profiles").select("avatar_url, full_name, username").eq("id", userId).maybeSingle();
+    }
+    if (res.error) return { avatarUrl: null, fullName: null };
+    const row = res.data as { avatar_url?: string | null; full_name?: string | null; username?: string | null } | null;
     const avatarUrl = row?.avatar_url && typeof row.avatar_url === "string" && row.avatar_url.trim() ? row.avatar_url.trim() : null;
     const fullName = row?.full_name && typeof row.full_name === "string" && row.full_name.trim() ? row.full_name.trim() : (row?.username && typeof row.username === "string" && row.username.trim() ? row.username.trim() : null);
     return { avatarUrl, fullName };

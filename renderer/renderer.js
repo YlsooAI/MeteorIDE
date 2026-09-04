@@ -363,6 +363,11 @@ function expandMessageForApi(m) {
 const BASE_PROMPT =
   "You are Meteor, a helpful coding assistant. Be concise and use full markdown: headings, bold, italic, lists, tables, blockquotes, links, and fenced code blocks with language tags. Always use markdown for structure and readability.";
 
+const WEB_PROTOCOL = `# Web Browsing & Search
+You have built-in web tools to fetch live web pages and search the internet:
+- fetch_url: Fetch the real-time readable text or markdown content of any URL (websites, articles, docs, APIs, raw code). Use this whenever a user provides or mentions a URL, or when you need reference material from a link.
+- search_internet: Search the internet via Browserbase to get fresh, up-to-date information, documentation, news, or answers to queries. Use this proactively whenever current knowledge is required or when researching external libraries/topics.`;
+
 const EDIT_PROTOCOL = `# Editing files
 You can write files directly to the user's workspace. To create or modify a file, output ONE fenced block per file:
 
@@ -1568,10 +1573,10 @@ function buildSystemMessage() {
     : "\n\n# Mode: BUILD — you may write files using write: blocks. New files will be created automatically, overwrites will ask for confirmation.";
   const withTerminal = `${EDIT_PROTOCOL}\n\n${TERMINAL_PROTOCOL}`;
   const contextNote = "\n\n# Codebase awareness\n- The Workspace section lists the project tree and file contents (truncated to a budget; open editor tabs come first).\n- A user message may start with an \"# Attached files\" block — files the user explicitly referenced with @. Treat those as the primary context and prefer editing them over guessing paths.";
-  if (workspace) return `${BASE_PROMPT}${modeNote}\n\n${withTerminal}${contextNote}\n\n${workspaceContext()}\n\n${terminalContext()}`;
+  if (workspace) return `${BASE_PROMPT}${modeNote}\n\n${WEB_PROTOCOL}\n\n${withTerminal}${contextNote}\n\n${workspaceContext()}\n\n${terminalContext()}`;
   const single = singleFileContext();
-  if (single) return `${BASE_PROMPT}${modeNote}\n\n${TERMINAL_PROTOCOL}${contextNote}\n\n${single}\n\n${terminalContext()}`;
-  return `${BASE_PROMPT}${modeNote}\n\n${TERMINAL_PROTOCOL}\n\n${terminalContext()}`;
+  if (single) return `${BASE_PROMPT}${modeNote}\n\n${WEB_PROTOCOL}\n\n${TERMINAL_PROTOCOL}${contextNote}\n\n${single}\n\n${terminalContext()}`;
+  return `${BASE_PROMPT}${modeNote}\n\n${WEB_PROTOCOL}\n\n${TERMINAL_PROTOCOL}\n\n${terminalContext()}`;
 }
 
 /* ---------------- AI file edits ---------------- */
@@ -1971,12 +1976,29 @@ function buildMcpToolBlock(call) {
   const head = document.createElement("div");
   head.className = "msg-mcp-head";
   const icon = document.createElement("span");
-  icon.innerHTML = ICONS.sparkle;
-  icon.style.color = "var(--blue)";
-  icon.style.display = "inline-flex";
+  const isWeb = call.server === "web" || call.tool === "fetch_url" || call.tool === "search_internet";
+  if (isWeb) {
+    if (call.tool === "search_internet" || (call.name && call.name.endsWith("search_internet"))) {
+      icon.textContent = "🔍";
+      icon.style.color = "var(--purple, #a855f7)";
+    } else {
+      icon.textContent = "🌐";
+      icon.style.color = "var(--blue, #3b82f6)";
+    }
+    icon.style.display = "inline-flex";
+    icon.style.fontSize = "13px";
+  } else {
+    icon.innerHTML = ICONS.sparkle;
+    icon.style.color = "var(--blue)";
+    icon.style.display = "inline-flex";
+  }
   const name = document.createElement("span");
   name.className = "mcp-tool-name";
-  name.textContent = `${call.server} · ${call.tool}`;
+  if (isWeb) {
+    name.textContent = call.tool === "search_internet" ? "Browserbase · search" : "Web · fetch_url";
+  } else {
+    name.textContent = `${call.server} · ${call.tool}`;
+  }
   name.title = call.name;
   const badge = document.createElement("span");
   badge.className = "mcp-tool-badge";
@@ -2307,6 +2329,9 @@ async function sendCurrent() {
       const statusEl = reasoningHead.querySelector(".reasoning-status");
       if (statusEl) statusEl.textContent = "error";
     }
+    if (msg && msg.includes("Quota exceeded")) {
+      refreshQuotaStatus();
+    }
     setBusy(false);
   };
   let acc = "";
@@ -2448,6 +2473,8 @@ async function sendCurrent() {
         }
         setBusy(false);
         refreshGitStatus();
+        if (data?.quota) refreshQuotaStatus(data.quota);
+        else refreshQuotaStatus();
         els.messages.scrollTop = els.messages.scrollHeight;
       },
       onError: (msg) => {
@@ -3354,6 +3381,56 @@ function toggleEmailVisibility(){
     if (toggleBtn){ toggleBtn.title = "Show email"; const open = toggleBtn.querySelector(".eye-open"); const closed = toggleBtn.querySelector(".eye-closed"); if (open) open.classList.remove("hidden"); if (closed) closed.classList.add("hidden"); }
   }
 }
+async function refreshQuotaStatus(status) {
+  try {
+    if (!status && window.meteorAPI?.quota?.getStatus) {
+      status = await window.meteorAPI.quota.getStatus();
+    }
+    if (!status) return;
+    const tierEl = document.getElementById("quota-tier-label");
+    const resetEl = document.getElementById("quota-reset-label");
+    const barEl = document.getElementById("quota-bar");
+    const usageEl = document.getElementById("quota-usage-text");
+    const percentEl = document.getElementById("quota-percent-text");
+    const container = document.getElementById("sb-quota");
+
+    if (!tierEl || !barEl || !usageEl) return;
+
+    if (!status.isFreeTier) {
+      tierEl.textContent = "Custom Key";
+      tierEl.style.color = "#4cd964";
+      if (resetEl) resetEl.textContent = "Unlimited";
+      barEl.style.width = "100%";
+      barEl.style.background = "#4cd964";
+      usageEl.textContent = `${(status.used / 1000).toFixed(1)}k tokens used`;
+      if (percentEl) percentEl.textContent = "Pro";
+      if (container) container.title = "Using custom API key — unlimited tokens (bypasses 1M/5h free quota)";
+      return;
+    }
+
+    tierEl.textContent = "Free Quota";
+    tierEl.style.color = status.isExceeded ? "#ff3b30" : "var(--text)";
+    if (resetEl) resetEl.textContent = `resets in ${status.timeRemainingFormatted}`;
+    const pct = Math.min(100, Math.max(0, status.percentUsed));
+    barEl.style.width = `${pct}%`;
+    barEl.style.background = status.isExceeded
+      ? "#ff3b30"
+      : pct > 85
+        ? "#ff9500"
+        : "linear-gradient(90deg, #ff6a2a, #ff9f43)";
+
+    const usedFormatted = (status.used / 1000).toFixed(0);
+    const limitFormatted = (status.limit / 1000000).toFixed(0);
+    usageEl.textContent = `${usedFormatted}k / ${limitFormatted}M tokens`;
+    if (percentEl) percentEl.textContent = `${pct}%`;
+    if (container) {
+      container.title = `Free tier: ${status.used.toLocaleString()} / ${status.limit.toLocaleString()} tokens used in current 5-hour window. Resets in ${status.timeRemainingFormatted}. Click to refresh.`;
+    }
+  } catch (e) {
+    console.warn("refreshQuotaStatus error:", e);
+  }
+}
+
 async function checkAuth(){
   try{
     if (!window.meteorAPI?.auth?.getSession) { hideAuthOverlay(); return; }
@@ -4163,6 +4240,10 @@ async function init() {
   refreshGitStatus();
   setFileName("untitled");
   updateCenterVisibility();
+  refreshQuotaStatus();
+  $("#sb-quota")?.addEventListener("click", () => refreshQuotaStatus());
+  window.addEventListener("focus", () => refreshQuotaStatus());
+  setInterval(() => refreshQuotaStatus(), 60000);
 }
 
 init();
