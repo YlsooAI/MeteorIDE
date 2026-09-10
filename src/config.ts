@@ -5,6 +5,8 @@ import { join } from "node:path";
 // Embedded keys for distributed builds (.exe/.dmg) — users will use our keys
 export const EMBEDDED_API_KEY = "sk-qgeusPXxBRNxeblGvbMbFETpNJzZc3MFl7zO6dARiB694CwDvxDhzaXVfhN2Jx1c";
 export const EMBEDDED_MERCURY_KEY = "sk_5766b0857b05f8b35566ffc42e55e7bc";
+export const EMBEDDED_TOKENROUTER_KEY = "sk-fUJ01WsVjVDgfzj15Pm3aIlxAx7scu47QH2d6CmBidDU6iuG";
+export const EMBEDDED_ORCAROUTER_KEY = "sk-orca-Qdv85X8nGSpXGRCvHbQi6LI0aSInXwLa9xmsBXnzDxY";
 export const EMBEDDED_BROWSERBASE_API_KEY = "bb_live_MXTt6FP2BJ5RKgtOr4gezAvQL2g";
 export const EMBEDDED_SUPABASE_URL = "https://ikjugnimawkoatkbvpgk.supabase.co";
 export const EMBEDDED_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlranVnbmltYXdrb2F0a2J2cGdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNzI3OTAsImV4cCI6MjA5NTY0ODc5MH0.xr9B_khj2zKIEoUsTisL66SGgn8Yo2K0YH5YDw0QmQw";
@@ -26,6 +28,8 @@ export type McpServers = Record<string, McpServerConfig>;
 export interface MeteorConfig {
   apiKey?: string;
   mercuryKey?: string;
+  tokenrouterKey?: string;
+  orcarouterKey?: string;
   browserbaseApiKey?: string;
   defaultModel?: string;
   mcpServers?: McpServers;
@@ -91,6 +95,44 @@ export function resolveMercuryKey(cliKey?: string): string | undefined {
   );
 }
 
+export function resolveTokenRouterKey(cliKey?: string): string | undefined {
+  return (
+    cliKey ??
+    process.env.TOKENROUTER_API_KEY ??
+    loadConfig().tokenrouterKey ??
+    EMBEDDED_TOKENROUTER_KEY
+  );
+}
+
+export function resolveOrcaRouterKey(cliKey?: string): string | undefined {
+  return (
+    cliKey ??
+    process.env.ORCAROUTER_API_KEY ??
+    loadConfig().orcarouterKey ??
+    EMBEDDED_ORCAROUTER_KEY
+  );
+}
+
+export function resolveModelKey(provider: string | undefined, cliKey?: string): string | undefined {
+  if (provider === "mercury") return resolveMercuryKey(cliKey);
+  if (provider === "tokenrouter") return resolveTokenRouterKey(cliKey);
+  if (provider === "orcarouter") return resolveOrcaRouterKey(cliKey);
+  return resolveApiKey(cliKey);
+}
+
+export function modelKeyHint(provider: string | undefined): string {
+  switch (provider) {
+    case "mercury":
+      return "Set MERCURY_API_KEY, or add mercuryKey to ~/.config/meteor/config.json";
+    case "tokenrouter":
+      return "Set TOKENROUTER_API_KEY, or run: meteor auth set-tokenrouter <key>";
+    case "orcarouter":
+      return "Set ORCAROUTER_API_KEY, or run: meteor auth set-orcarouter <key>";
+    default:
+      return "Set METEOR_API_KEY, or run: meteor auth set <your-key>";
+  }
+}
+
 export function resolveBrowserbaseKey(cliKey?: string): string | undefined {
   return (
     cliKey ??
@@ -105,12 +147,28 @@ export function saveBrowserbaseKey(key: string): void {
   saveConfig({ browserbaseApiKey: key });
 }
 
+export function saveTokenRouterKey(key: string): void {
+  saveConfig({ tokenrouterKey: key });
+}
+
+export function saveOrcaRouterKey(key: string): void {
+  saveConfig({ orcarouterKey: key });
+}
+
 export function isUsingFreeTier(cliKey?: string, provider?: string): boolean {
   if (cliKey) return false;
   if (provider === "mercury") {
     if (process.env.MERCURY_API_KEY) return false;
     const cfg = loadConfig();
     return !cfg.mercuryKey;
+  }
+  if (provider === "tokenrouter") {
+    if (process.env.TOKENROUTER_API_KEY) return false;
+    return !loadConfig().tokenrouterKey;
+  }
+  if (provider === "orcarouter") {
+    if (process.env.ORCAROUTER_API_KEY) return false;
+    return !loadConfig().orcarouterKey;
   }
   if (process.env.METEOR_API_KEY || process.env.OPENCODE_API_KEY) return false;
   const cfg = loadConfig();

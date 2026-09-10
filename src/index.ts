@@ -3,11 +3,11 @@ import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
 import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS, type MeteorModel } from "./models.js";
 import { complete, ZenError, type Message } from "./zen.js";
-import { clearApiKey, loadConfig, resolveApiKey, resolveMercuryKey, resetConfig, saveConfig, isUsingFreeTier, saveBrowserbaseKey, resolveBrowserbaseKey } from "./config.js";
+import { clearApiKey, loadConfig, resolveApiKey, resetConfig, saveConfig, isUsingFreeTier, saveBrowserbaseKey, resolveBrowserbaseKey, resolveModelKey, modelKeyHint, saveTokenRouterKey, saveOrcaRouterKey, resolveTokenRouterKey, resolveOrcaRouterKey } from "./config.js";
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, formatTimeRemaining, QuotaExceededError } from "./quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "./web.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.15";
 const DEFAULT_SYSTEM =
   "You are Meteor, a helpful assistant. Answer concisely. You can use full markdown: headings, bold, italic, lists, tables, blockquotes, links, and fenced code blocks with language tags. Prefer markdown for structure and readability.\n\nYou have built-in web tools:\n- fetch_url: fetch the live readable text or markdown content of any URL or link the user provides or asks about.\n- search_internet: search the internet via Browserbase to find up-to-date documentation, news, facts, and code examples whenever current information is needed. Use it proactively whenever fresh context is required.";
 
@@ -33,6 +33,8 @@ Usage
   meteor plan                     Plan the build — preview without writing files
   meteor models                   List available models
   meteor auth set <api-key>             Store your API key
+  meteor auth set-tokenrouter <key>     Store TokenRouter API key (for Sunlight 2 Pro)
+  meteor auth set-orcarouter <key>      Store OrcaRouter API key (for Sunlight 2)
   meteor auth set-browserbase <bb-key>  Store Browserbase API key (for live web search)
   meteor auth show                      Show where the API keys come from
   meteor auth clear                     Remove stored API key
@@ -59,6 +61,8 @@ Options
 
 Environment
   METEOR_API_KEY         Your Meteor API key
+  TOKENROUTER_API_KEY    TokenRouter key (Sunlight 2 Pro)
+  ORCAROUTER_API_KEY     OrcaRouter key (Sunlight 2)
 `;
 
 function parseArgs(argv: string[]): CliArgs {
@@ -105,18 +109,9 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 function requireKey(args: CliArgs, model?: MeteorModel): string {
-  const isMercury = model?.provider === "mercury";
-  const key = isMercury ? resolveMercuryKey(args.apiKey) : resolveApiKey(args.apiKey);
+  const key = resolveModelKey(model?.provider, args.apiKey);
   if (!key) {
-    if (isMercury) {
-      console.error(
-        "No Mercury API key found. Set MERCURY_API_KEY, or add mercuryKey to ~/.config/meteor/config.json",
-      );
-    } else {
-      console.error(
-        "No API key found. Set METEOR_API_KEY, or run:\n  meteor auth set <your-key>",
-      );
-    }
+    console.error(`No API key found for ${model?.name ?? "model"}. ${modelKeyHint(model?.provider)}`);
     process.exit(1);
   }
   return key;
@@ -406,15 +401,39 @@ async function authAction(sub: string | undefined, value: string | undefined): P
       console.log("Browserbase API key saved to ~/.config/meteor/config.json");
       return;
     }
+    case "set-tokenrouter": {
+      if (!value) throw new Error("Usage: meteor auth set-tokenrouter <tokenrouter-api-key>");
+      saveTokenRouterKey(value);
+      console.log("TokenRouter API key saved to ~/.config/meteor/config.json");
+      return;
+    }
+    case "set-orcarouter": {
+      if (!value) throw new Error("Usage: meteor auth set-orcarouter <orcarouter-api-key>");
+      saveOrcaRouterKey(value);
+      console.log("OrcaRouter API key saved to ~/.config/meteor/config.json");
+      return;
+    }
     case "show": {
       const source = process.env.METEOR_API_KEY || process.env.OPENCODE_API_KEY
         ? "environment (METEOR_API_KEY/OPENCODE_API_KEY)"
         : loadConfig().apiKey
           ? "~/.config/meteor/config.json"
           : "not configured";
+      const trSource = process.env.TOKENROUTER_API_KEY
+        ? "environment (TOKENROUTER_API_KEY)"
+        : loadConfig().tokenrouterKey
+          ? "~/.config/meteor/config.json"
+          : "not configured";
+      const orcaSource = process.env.ORCAROUTER_API_KEY
+        ? "environment (ORCAROUTER_API_KEY)"
+        : loadConfig().orcarouterKey
+          ? "~/.config/meteor/config.json"
+          : "not configured";
       const bbSource = resolveBrowserbaseKey() ? "configured" : "not configured (using DuckDuckGo fallback)";
-      console.log(`API key source:  ${source}`);
-      console.log(`Browserbase key: ${bbSource}`);
+      console.log(`API key source:      ${source}`);
+      console.log(`TokenRouter key:     ${trSource}`);
+      console.log(`OrcaRouter key:      ${orcaSource}`);
+      console.log(`Browserbase key:     ${bbSource}`);
       return;
     }
     case "clear": {
@@ -422,7 +441,7 @@ async function authAction(sub: string | undefined, value: string | undefined): P
       return;
     }
     default:
-      throw new Error("Usage: meteor auth <set|set-browserbase|show|clear> [args]");
+      throw new Error("Usage: meteor auth <set|set-tokenrouter|set-orcarouter|set-browserbase|show|clear> [args]");
   }
 }
 

@@ -217,8 +217,9 @@ function parseChatToolCalls(acc: Map<number, { id: string; name: string; argumen
 
 async function completeChat(opts: CompletionOptions): Promise<CompletionResult> {
   const allowedEffort = opts.reasoningEffort && (REASONING_EFFORTS as readonly string[]).includes(opts.reasoningEffort) ? opts.reasoningEffort : undefined;
-  // Mercury (Inception) rejects unknown reasoning params — only send effort for Zen.
-  const reasoningPayload = opts.provider !== "mercury" && allowedEffort
+  // Only send reasoning params to providers known to accept them (Zen).
+  // Mercury (Inception) and the TokenRouter/OrcaRouter endpoints reject unknown reasoning params.
+  const reasoningPayload = opts.provider === "zen" && allowedEffort
       ? { reasoning_effort: allowedEffort, reasoning: { effort: allowedEffort } }
       : {};
   const chatTools = mcpToolsToChatTools(opts.tools);

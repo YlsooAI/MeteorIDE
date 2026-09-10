@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS } from "../src/models.js";
 import { complete, ZenError, type Message } from "../src/zen.js";
 import { loadMcpServers, saveMcpServers, validateMcpServers, type McpServerConfig } from "../src/config.js";
-import { resolveApiKey, resolveMercuryKey, isUsingFreeTier } from "../src/config.js";
+import { resolveApiKey, isUsingFreeTier, resolveModelKey, modelKeyHint } from "../src/config.js";
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, resetQuota, QuotaExceededError } from "../src/quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "../src/web.js";
 import { scanWorkspace, writeFileInWorkspace } from "./workspace.js";
@@ -151,11 +151,11 @@ ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string;
   const firstMsg = (payload.firstMessage || proj.last_message || "").slice(0, 800);
   const firstResp = (payload.firstResponse || "").slice(0, 800);
   const prompt = `Generate a short, concise chat title (3-6 words, no quotes, no period, Title Case, PLAIN TEXT ONLY — no markdown, no # symbols, no bold) that summarizes this conversation. Return ONLY the title, nothing else.\n\nUser: ${firstMsg}\n${firstResp ? `Assistant: ${firstResp}` : ""}`;
-  const apiKey = resolveApiKey();
-  if (!apiKey) throw new Error("No API key for title generation");
-  const isFree = isUsingFreeTier();
-  checkQuotaOrThrow(isFree);
   const proModel = resolveModel("sunlight-2-pro");
+  const apiKey = resolveModelKey(proModel.provider);
+  if (!apiKey) throw new Error(`No API key for title generation. ${modelKeyHint(proModel.provider)}`);
+  const isFree = isUsingFreeTier(undefined, proModel.provider);
+  checkQuotaOrThrow(isFree);
   try {
     const result = await complete({
       apiKey,
@@ -212,9 +212,8 @@ ipcMain.handle(
     const finish = () => { if (!settled) { settled = true; clearTimeout(overallWatchdog); } };
     try {
       const model = resolveModel(payload.modelKey ?? DEFAULT_MODEL);
-      const isMercury = model.provider === "mercury";
-      const apiKey = isMercury ? resolveMercuryKey(payload.apiKey) : resolveApiKey(payload.apiKey);
-      if (!apiKey) throw new Error(isMercury ? "No Mercury API key found. Set MERCURY_API_KEY or add mercuryKey to ~/.config/meteor/config.json." : "No API key found. Run `meteor auth set <key>` in the terminal or set METEOR_API_KEY.");
+      const apiKey = resolveModelKey(model.provider, payload.apiKey);
+      if (!apiKey) throw new Error(`No API key found for ${model.name}. ${modelKeyHint(model.provider)}`);
       // gate: must be authenticated via Supabase (or mock) before using Meteor
       const authSess = await authGetSession().catch(() => ({ user: null }));
       if (!authSess.user) throw new Error("Not authenticated — please sign in to use Meteor.");

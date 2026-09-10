@@ -1,5 +1,5 @@
 export type Protocol = "chat" | "responses";
-export type Provider = "zen" | "mercury";
+export type Provider = "zen" | "mercury" | "tokenrouter" | "orcarouter";
 
 export interface MeteorModel {
   key: string;
@@ -16,19 +16,21 @@ export const MODELS: Record<string, MeteorModel> = {
   "sunlight-2": {
     key: "sunlight-2",
     name: "Sunlight 2",
-    zenId: "opencode/muse-spark-1.2-contributor-free",
-    apiModel: "muse-spark-1.2-contributor-free",
-    protocol: "responses",
-    provider: "zen",
+    zenId: "orcarouter/z-ai/glm-5.3-flash-free",
+    apiModel: "z-ai/glm-5.3-flash-free",
+    protocol: "chat",
+    provider: "orcarouter",
+    baseUrl: "https://api.orcarouter.ai/v1",
     description: "Sunlight 2",
   },
   "sunlight-2-pro": {
     key: "sunlight-2-pro",
     name: "Sunlight 2 Pro",
-    zenId: "opencode/muse-spark-1.3-contributor-free",
-    apiModel: "muse-spark-1.3-contributor-free",
-    protocol: "responses",
-    provider: "zen",
+    zenId: "tokenrouter/z-ai/glm-5.3-free",
+    apiModel: "z-ai/glm-5.3-free",
+    protocol: "chat",
+    provider: "tokenrouter",
+    baseUrl: "https://api.tokenrouter.com/v1",
     description: "Sunlight 2 Pro",
   },
   "sunlight-2-lite": {
