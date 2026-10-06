@@ -3,11 +3,11 @@ import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
 import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS, type MeteorModel } from "./models.js";
 import { complete, ZenError, type Message } from "./zen.js";
-import { clearApiKey, loadConfig, resolveApiKey, resetConfig, saveConfig, isUsingFreeTier, saveBrowserbaseKey, resolveBrowserbaseKey, resolveModelKey, modelKeyHint, saveTokenRouterKey, saveOrcaRouterKey, resolveTokenRouterKey, resolveOrcaRouterKey } from "./config.js";
+import { clearApiKey, loadConfig, resolveApiKey, resetConfig, saveConfig, isUsingFreeTier, saveBrowserbaseKey, resolveBrowserbaseKey, resolveModelKey, modelKeyHint, saveTokenRouterKey, saveOrcaRouterKey, saveGatewayKey, resolveTokenRouterKey, resolveOrcaRouterKey } from "./config.js";
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, formatTimeRemaining, QuotaExceededError } from "./quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "./web.js";
 
-const VERSION = "0.2.15";
+const VERSION = "0.2.16";
 const DEFAULT_SYSTEM =
   "You are Meteor, a helpful assistant. Answer concisely. You can use full markdown: headings, bold, italic, lists, tables, blockquotes, links, and fenced code blocks with language tags. Prefer markdown for structure and readability.\n\nYou have built-in web tools:\n- fetch_url: fetch the live readable text or markdown content of any URL or link the user provides or asks about.\n- search_internet: search the internet via Browserbase to find up-to-date documentation, news, facts, and code examples whenever current information is needed. Use it proactively whenever fresh context is required.";
 
@@ -33,6 +33,7 @@ Usage
   meteor plan                     Plan the build — preview without writing files
   meteor models                   List available models
   meteor auth set <api-key>             Store your API key
+  meteor auth set-gateway <key>        Store Vercel AI Gateway API key (all Sunlight models)
   meteor auth set-tokenrouter <key>     Store TokenRouter API key (for Sunlight 2 Pro)
   meteor auth set-orcarouter <key>      Store OrcaRouter API key (for Sunlight 2)
   meteor auth set-browserbase <bb-key>  Store Browserbase API key (for live web search)
@@ -61,6 +62,7 @@ Options
 
 Environment
   METEOR_API_KEY         Your Meteor API key
+  AI_GATEWAY_API_KEY     Vercel AI Gateway key (all Sunlight models)
   TOKENROUTER_API_KEY    TokenRouter key (Sunlight 2 Pro)
   ORCAROUTER_API_KEY     OrcaRouter key (Sunlight 2)
 `;
@@ -401,6 +403,12 @@ async function authAction(sub: string | undefined, value: string | undefined): P
       console.log("Browserbase API key saved to ~/.config/meteor/config.json");
       return;
     }
+    case "set-gateway": {
+      if (!value) throw new Error("Usage: meteor auth set-gateway <ai-gateway-api-key>");
+      saveGatewayKey(value);
+      console.log("Vercel AI Gateway key saved to ~/.config/meteor/config.json");
+      return;
+    }
     case "set-tokenrouter": {
       if (!value) throw new Error("Usage: meteor auth set-tokenrouter <tokenrouter-api-key>");
       saveTokenRouterKey(value);
@@ -419,6 +427,11 @@ async function authAction(sub: string | undefined, value: string | undefined): P
         : loadConfig().apiKey
           ? "~/.config/meteor/config.json"
           : "not configured";
+      const gwSource = process.env.AI_GATEWAY_API_KEY
+        ? "environment (AI_GATEWAY_API_KEY)"
+        : loadConfig().gatewayKey
+          ? "~/.config/meteor/config.json"
+          : "not configured";
       const trSource = process.env.TOKENROUTER_API_KEY
         ? "environment (TOKENROUTER_API_KEY)"
         : loadConfig().tokenrouterKey
@@ -431,6 +444,7 @@ async function authAction(sub: string | undefined, value: string | undefined): P
           : "not configured";
       const bbSource = resolveBrowserbaseKey() ? "configured" : "not configured (using DuckDuckGo fallback)";
       console.log(`API key source:      ${source}`);
+      console.log(`AI Gateway key:     ${gwSource}`);
       console.log(`TokenRouter key:     ${trSource}`);
       console.log(`OrcaRouter key:      ${orcaSource}`);
       console.log(`Browserbase key:     ${bbSource}`);
@@ -441,7 +455,7 @@ async function authAction(sub: string | undefined, value: string | undefined): P
       return;
     }
     default:
-      throw new Error("Usage: meteor auth <set|set-tokenrouter|set-orcarouter|set-browserbase|show|clear> [args]");
+      throw new Error("Usage: meteor auth <set|set-gateway|set-tokenrouter|set-orcarouter|set-browserbase|show|clear> [args]");
   }
 }
 

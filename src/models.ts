@@ -1,5 +1,5 @@
 export type Protocol = "chat" | "responses";
-export type Provider = "zen" | "mercury" | "tokenrouter" | "orcarouter";
+export type Provider = "zen" | "mercury" | "tokenrouter" | "orcarouter" | "vercel";
 
 export interface MeteorModel {
   key: string;
@@ -12,35 +12,38 @@ export interface MeteorModel {
   description: string;
 }
 
+// All models are served through the Vercel AI Gateway (OpenAI-compatible, provider/model ids).
+export const VERCEL_AI_GATEWAY_URL = "https://ai-gateway.vercel.sh/v1";
+
 export const MODELS: Record<string, MeteorModel> = {
   "sunlight-2": {
     key: "sunlight-2",
     name: "Sunlight 2",
-    zenId: "orcarouter/z-ai/glm-5.3-flash-free",
-    apiModel: "z-ai/glm-5.3-flash-free",
+    zenId: "vercel/xiaomi/mimo-v2.6-flash",
+    apiModel: "xiaomi/mimo-v2.6-flash",
     protocol: "chat",
-    provider: "orcarouter",
-    baseUrl: "https://api.orcarouter.ai/v1",
+    provider: "vercel",
+    baseUrl: VERCEL_AI_GATEWAY_URL,
     description: "Sunlight 2",
   },
   "sunlight-2-pro": {
     key: "sunlight-2-pro",
     name: "Sunlight 2 Pro",
-    zenId: "tokenrouter/z-ai/glm-5.3-free",
-    apiModel: "z-ai/glm-5.3-free",
+    zenId: "vercel/alibaba/qwen3.8-omni-flash",
+    apiModel: "alibaba/qwen3.8-omni-flash",
     protocol: "chat",
-    provider: "tokenrouter",
-    baseUrl: "https://api.tokenrouter.com/v1",
+    provider: "vercel",
+    baseUrl: VERCEL_AI_GATEWAY_URL,
     description: "Sunlight 2 Pro",
   },
   "sunlight-2-lite": {
     key: "sunlight-2-lite",
     name: "Sunlight 2 Lite",
-    zenId: "inception/mercury-2.5-preview",
-    apiModel: "mercury-2",
+    zenId: "vercel/inception/mercury-2",
+    apiModel: "inception/mercury-2",
     protocol: "chat",
-    provider: "mercury",
-    baseUrl: "https://api.inceptionlabs.ai/v1",
+    provider: "vercel",
+    baseUrl: VERCEL_AI_GATEWAY_URL,
     description: "Sunlight 2 Lite",
   },
 };

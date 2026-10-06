@@ -2293,7 +2293,7 @@ async function sendCurrent() {
   reasoningBox.className = "reasoning hidden";
   const reasoningHead = document.createElement("button");
   reasoningHead.className = "reasoning-head";
-  reasoningHead.innerHTML = `<span class="reasoning-caret" style="display:inline-flex">${ICONS.chevronDown}</span><span class="reasoning-title">Reasoning</span><span class="reasoning-effort">${esc(effortLabel(currentReasoningEffort))}</span><span class="reasoning-status">thinking…</span>`;
+  reasoningHead.innerHTML = `<span class="reasoning-caret" style="display:inline-flex">${ICONS.chevronDown}</span><span class="reasoning-title">Thinking</span><span class="reasoning-effort">${esc(effortLabel(currentReasoningEffort))}</span><span class="reasoning-status">thinking…</span>`;
   const reasoningBody = document.createElement("div");
   reasoningBody.className = "reasoning-body";
   reasoningBody.textContent = "";
@@ -2392,12 +2392,15 @@ async function sendCurrent() {
         if (!delta) return;
         if (reasoningBox.classList.contains("hidden")) {
           reasoningBox.classList.remove("hidden");
+          reasoningBox.classList.add("thinking");
           reasoningStart = Date.now();
         }
         reasoningAcc += delta;
         // stream as monospace, preserve whitespace
         reasoningBody.textContent = reasoningAcc;
         reasoningBody.scrollTop = reasoningBody.scrollHeight;
+        const statusEl = reasoningHead.querySelector(".reasoning-status");
+        if (statusEl) statusEl.textContent = `thinking… ${((Date.now() - reasoningStart) / 1000).toFixed(0)}s`;
         els.messages.scrollTop = els.messages.scrollHeight;
       },
       onToolCall: onToolCallUI,
@@ -2407,7 +2410,7 @@ async function sendCurrent() {
         if (info && info.count) {
           const pill = document.createElement("div");
           pill.className = "tool-info";
-          pill.innerHTML = `${ICONS.sparkle} ${info.count} MCP tools available`;
+          pill.innerHTML = `${ICONS.sparkle} ${info.count} plugin tools available`;
           pill.title = (info.tools || []).map((t) => `${t.server}.${t.name}`).join(", ");
           toolsDiv.append(pill);
         }
@@ -2430,7 +2433,8 @@ async function sendCurrent() {
         if (reasoningAcc) {
           const elapsed = ((Date.now() - reasoningStart) / 1000).toFixed(1);
           const statusEl = reasoningHead.querySelector(".reasoning-status");
-          if (statusEl) statusEl.textContent = `thought for ${elapsed}s · ${reasoningAcc.length} chars`;
+          if (statusEl) statusEl.textContent = `thought for ${elapsed}s`;
+          reasoningBox.classList.remove("thinking");
           // auto-collapse after completion if text exists
           if (acc) {
             reasoningExpanded = false;
@@ -2488,7 +2492,7 @@ async function sendCurrent() {
       const w = activityWatch; activityWatch = null;
       if (w) clearInterval(w);
       try { stop(); } catch {}
-      failStream("No response for 90s — the request stalled (possibly an MCP tool or server hung). Send a new message to retry.");
+      failStream("No response for 90s — the request stalled (possibly a plugin tool or server hung). Send a new message to retry.");
     }
   }, 5000);
 }
@@ -2776,7 +2780,7 @@ let mcpJsonDirty = false;
 
 function mcpCountLabel() {
   const n = Object.keys(mcpServers).length;
-  return `${n} server${n === 1 ? "" : "s"}`;
+  return `${n} plugin${n === 1 ? "" : "s"}`;
 }
 
 function mcpIsHttpType(t) {
@@ -2964,7 +2968,7 @@ function renderMcpList() {
     const note = document.createElement("div");
     note.className = "mcp-empty";
     note.style.padding = "12px";
-    note.innerHTML = `<span style="color:var(--dim)">All ${names.length} server(s) are disabled — toggle filter to show.</span>`;
+    note.innerHTML = `<span style="color:var(--dim)">All ${names.length} plugin(s) are disabled — toggle filter to show.</span>`;
     list.append(note);
     return;
   }
@@ -3020,7 +3024,7 @@ async function connectMcp(name, btn) {
     await window.meteorAPI.mcp.test(name);
     mcpStatuses[name] = { state: "connected", at: Date.now() };
     if (inline) { inline.textContent = `✓ ${name} connected`; inline.className = "mcp-inline-status ok"; }
-    addMsg("system", `✓ MCP ${name} connected`);
+    addMsg("system", `✓ Plugin ${name} connected`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     mcpStatuses[name] = { state: "error", error: msg, at: Date.now() };
@@ -3043,7 +3047,7 @@ function showMcpForm(name) {
     if (delBtn) delBtn.classList.remove("hidden");
   } else {
     fillForm("", null);
-    if (title) title.textContent = "New MCP server";
+    if (title) title.textContent = "New plugin";
     if (delBtn) delBtn.classList.add("hidden");
     if (name) document.getElementById("mcp-name").value = name;
   }
@@ -3106,13 +3110,13 @@ async function saveFromForm(e) {
   } catch (err) {
     if (errEl) errEl.textContent = err instanceof Error ? err.message : String(err);
   } finally {
-    if (btn) { btn.textContent = "Save server"; btn.disabled = false; }
+    if (btn) { btn.textContent = "Save plugin"; btn.disabled = false; }
   }
 }
 
 async function deleteCurrentMcp() {
   if (!mcpEditing) return;
-  if (!confirm(`Delete MCP server "${mcpEditing}"?`)) return;
+  if (!confirm(`Delete plugin "${mcpEditing}"?`)) return;
   const errEl = document.getElementById("mcp-form-error");
   const next = { ...mcpServers };
   delete next[mcpEditing];
@@ -3731,11 +3735,11 @@ async function refreshUpdateBanner(force=false){
     } else {
       banner.classList.add("hidden");
       if (force && status && status.error){
-        banner.innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px;color:var(--red)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg> Couldn't check for updates — ${esc(status.error).slice(0,120)}</span><span class="spacer"></span><button id="update-banner-retry" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--text);cursor:pointer">Retry</button>`;
+        banner.innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px;color:var(--red)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg> Couldn't check for updates — ${esc(status.error).slice(0,120)}</span><span class="spacer"></span><button id="update-banner-retry" class="ub-secondary">Retry</button>`;
         banner.classList.remove("hidden");
         setTimeout(()=> document.getElementById("update-banner-retry")?.addEventListener("click", async ()=>{ const b=document.getElementById("update-banner-retry"); if(b){b.textContent="Checking…";b.disabled=true;} await refreshUpdateBanner(true); }), 0);
       } else if (force && status && !status.hasUpdate){
-        banner.innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px;color:var(--dim)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> You are up to date — v${status.currentVersion} (latest ${status.latestVersion})</span><span class="spacer"></span><button id="update-banner-ok" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--dim);cursor:pointer">OK</button>`;
+        banner.innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px;color:var(--dim)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> You are up to date — v${status.currentVersion} (latest ${status.latestVersion})</span><span class="spacer"></span><button id="update-banner-ok" class="ub-secondary">OK</button>`;
         banner.classList.remove("hidden");
         setTimeout(()=> document.getElementById("update-banner-ok")?.addEventListener("click", ()=> banner.classList.add("hidden")), 0);
         setTimeout(()=> banner.classList.add("hidden"), 4000);
@@ -3758,12 +3762,12 @@ function initUpdater(){
     try{
       const res = await window.meteorAPI.updater.install();
       if (res?.needsRestart){
-        banner.innerHTML = `<span style="color:var(--green);display:inline-flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> ${esc(res.output || "Updated — restart to apply")}</span><span class="spacer"></span><button id="update-restart-btn" class="btn-primary" style="font-size:11px;padding:5px 14px">Restart now</button>`;
+        banner.innerHTML = `<span style="color:var(--green);display:inline-flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> ${esc(res.output || "Updated — restart to apply")}</span><span class="spacer"></span><button id="update-restart-btn" class="btn-primary">Restart now</button>`;
         document.getElementById("update-restart-btn")?.addEventListener("click", async ()=>{ try{ await window.meteorAPI.updater.restart(); }catch{ location.reload(); } });
       } else if (res?.method === "auto-exe"){
         banner.innerHTML = `<span style="color:var(--green);display:inline-flex;align-items:center;gap:6px">Installing update… app will close</span>`;
       } else if (res?.fallbackOpened){
-        banner.innerHTML = `<span>Auto-update failed (${esc(res.error || "").slice(0,80)}) — opened GitHub releases</span><span class="spacer"></span><button id="update-dismiss2" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--dim);cursor:pointer">Dismiss</button>`;
+        banner.innerHTML = `<span>Auto-update failed (${esc(res.error || "").slice(0,80)}) — opened GitHub releases</span><span class="spacer"></span><button id="update-dismiss2" class="ub-secondary">Dismiss</button>`;
         document.getElementById("update-dismiss2")?.addEventListener("click", ()=> banner.classList.add("hidden"));
       } else {
         viewBtn?.click();
@@ -3833,7 +3837,7 @@ async function maybeShowChangelog(currentVersion) {
 }
 
 async function init() {
-  const savedTheme = localStorage.getItem("meteor:theme") || (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  const savedTheme = "light"; // white mode only
   applyTheme(savedTheme);
   const tbtn = document.getElementById("theme-toggle");
   if (tbtn) tbtn.addEventListener("click", () => {

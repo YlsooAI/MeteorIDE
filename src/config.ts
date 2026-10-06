@@ -30,6 +30,7 @@ export interface MeteorConfig {
   mercuryKey?: string;
   tokenrouterKey?: string;
   orcarouterKey?: string;
+  gatewayKey?: string;
   browserbaseApiKey?: string;
   defaultModel?: string;
   mcpServers?: McpServers;
@@ -113,7 +114,16 @@ export function resolveOrcaRouterKey(cliKey?: string): string | undefined {
   );
 }
 
+export function resolveGatewayKey(cliKey?: string): string | undefined {
+  return (
+    cliKey ??
+    process.env.AI_GATEWAY_API_KEY ??
+    loadConfig().gatewayKey
+  );
+}
+
 export function resolveModelKey(provider: string | undefined, cliKey?: string): string | undefined {
+  if (provider === "vercel") return resolveGatewayKey(cliKey);
   if (provider === "mercury") return resolveMercuryKey(cliKey);
   if (provider === "tokenrouter") return resolveTokenRouterKey(cliKey);
   if (provider === "orcarouter") return resolveOrcaRouterKey(cliKey);
@@ -122,6 +132,8 @@ export function resolveModelKey(provider: string | undefined, cliKey?: string): 
 
 export function modelKeyHint(provider: string | undefined): string {
   switch (provider) {
+    case "vercel":
+      return "Set AI_GATEWAY_API_KEY, or run: meteor auth set-gateway <key>";
     case "mercury":
       return "Set MERCURY_API_KEY, or add mercuryKey to ~/.config/meteor/config.json";
     case "tokenrouter":
@@ -147,6 +159,10 @@ export function saveBrowserbaseKey(key: string): void {
   saveConfig({ browserbaseApiKey: key });
 }
 
+export function saveGatewayKey(key: string): void {
+  saveConfig({ gatewayKey: key });
+}
+
 export function saveTokenRouterKey(key: string): void {
   saveConfig({ tokenrouterKey: key });
 }
@@ -157,6 +173,10 @@ export function saveOrcaRouterKey(key: string): void {
 
 export function isUsingFreeTier(cliKey?: string, provider?: string): boolean {
   if (cliKey) return false;
+  if (provider === "vercel") {
+    // Gateway usage is billed to the key owner; there is no shared free tier.
+    return false;
+  }
   if (provider === "mercury") {
     if (process.env.MERCURY_API_KEY) return false;
     const cfg = loadConfig();

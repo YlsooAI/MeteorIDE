@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob: https://ikjugnimawkoatkbvpgk.supabase.co https://*.supabase.co; connect-src 'self' https://ikjugnimawkoatkbvpgk.supabase.co https://*.supabase.co; script-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https: blob: https://ikjugnimawkoatkbvpgk.supabase.co https://*.supabase.co; connect-src 'self' https://ikjugnimawkoatkbvpgk.supabase.co https://*.supabase.co; script-src 'self'" />
   <title>Meteor</title>
   <link rel="stylesheet" href="./style.css" />
 </head>
@@ -22,13 +22,13 @@
           Search <span class="sb-kbd">⌘ K</span>
         </button>
       </nav>
-      <div id="search-wrap" class="hidden" style="padding:0 8px 8px">
-        <div style="display:flex;align-items:center;gap:6px;background:#1e1e22;border:1px solid #2a2a30;border-radius:8px;padding:6px 8px">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6a6a6e" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M16 16l4 4"/></svg>
-          <input id="chat-search" placeholder="Search chats..." style="flex:1;background:transparent;border:none;outline:none;color:#e6e8eb;font-size:12px" autocomplete="off" spellcheck="false" />
-          <button id="search-clear" class="icon-mini" style="display:none;width:18px;height:18px" title="Clear"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+      <div id="search-wrap" class="hidden">
+        <div class="search-field">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M16 16l4 4"/></svg>
+          <input id="chat-search" placeholder="Search chats…" autocomplete="off" spellcheck="false" />
+          <button id="search-clear" class="icon-mini" style="display:none" title="Clear"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
         </div>
-        <div id="search-count" style="font-size:11px;color:var(--dim2);padding:4px 2px;display:none"></div>
+        <div id="search-count" style="display:none"></div>
       </div>
 
 
@@ -81,26 +81,24 @@
       <div class="spacer"></div>
 
       <div class="sb-footer">
-        <div id="sb-quota" style="padding:8px 10px 6px;border-top:1px solid #1e1e22;margin-top:6px;display:flex;flex-direction:column;gap:4px;cursor:pointer" title="Meteor Token Quota (1M tokens / 5h)">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--text)">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff6a2a" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <div id="sb-quota" title="Meteor Token Quota (1M tokens / 5h)">
+          <div class="quota-top">
+            <span class="quota-tier">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               <span id="quota-tier-label">Free Quota</span>
             </span>
-            <span id="quota-reset-label" style="font-size:10px;color:var(--dim2)">5h window</span>
+            <span id="quota-reset-label" class="quota-meta">5h window</span>
           </div>
-          <div style="height:5px;background:#232328;border-radius:3px;overflow:hidden;margin:1px 0">
-            <div id="quota-bar" style="height:100%;width:0%;background:linear-gradient(90deg, #ff6a2a, #ff9f43);border-radius:3px;transition:width .3s ease"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim2)">
+          <div class="quota-track"><div id="quota-bar"></div></div>
+          <div class="quota-meta quota-bottom">
             <span id="quota-usage-text">0 / 1M tokens</span>
             <span id="quota-percent-text">0%</span>
           </div>
         </div>
-        <div style="padding:6px 8px 4px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim2);border-top:1px solid #1e1e22;margin-top:2px">
-          <span id="update-footer-version" title="Show what's new" style="font-family:var(--mono);cursor:pointer">v0.2.15</span>
-          <span id="update-footer-status" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
-          <button id="check-update-btn" title="Check for updates" style="font-size:11px;padding:3px 8px;border:1px solid #2a2a30;border-radius:6px;background:#1e1e22;color:var(--dim);cursor:pointer">Check</button>
+        <div class="version-row">
+          <span id="update-footer-version" title="Show what's new">v0.2.16</span>
+          <span id="update-footer-status"></span>
+          <button id="check-update-btn" title="Check for updates">Check</button>
         </div>
         <div class="user-row">
           <span id="auth-avatar" class="avatar">
@@ -137,12 +135,12 @@
         </div>
       </header>
 
-      <div id="update-banner" class="hidden" style="display:flex;align-items:center;gap:10px;margin:8px 12px 0;padding:10px 12px;background:linear-gradient(90deg, rgba(255,106,42,.12), rgba(255,106,42,.06));border:1px solid rgba(255,106,42,.22);border-radius:10px;color:var(--text);font-size:12px">
-        <span style="display:inline-flex;color:var(--accent)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/><line x1="12" y1="9" x2="12" y2="21"/></svg></span>
-        <span id="update-text" style="flex:1">Update available — <span id="update-version" style="font-weight:700"></span></span>
-        <button id="update-view" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #2a2a30;background:#1e1e22;color:var(--dim);cursor:pointer">View</button>
-        <button id="update-install" class="btn-primary" style="font-size:11px;padding:6px 14px">Update</button>
-        <button id="update-dismiss" class="icon-mini" title="Dismiss" style="display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+      <div id="update-banner" class="hidden">
+        <span class="ub-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/><line x1="12" y1="9" x2="12" y2="21"/></svg></span>
+        <span id="update-text">Update available — <span id="update-version"></span></span>
+        <button id="update-view" class="ub-secondary">View</button>
+        <button id="update-install" class="btn-primary">Update</button>
+        <button id="update-dismiss" class="icon-mini" title="Dismiss"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
       </div>
 
       <!-- geometric background -->
@@ -179,7 +177,7 @@
                 <button class="seg-btn active" data-mode="build">Build</button>
               </div>
               <span class="c-auto" style="display:none"><input type="checkbox" id="chk-auto" checked> auto</span>
-              <span class="cc-full" title="Access level"><span style="color:#ff6a2a;display:inline-flex;vertical-align:middle"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.4 7.2H22l-6.2 4.5 2.4 7.3L12 16.5 5.8 21l2.4-7.3L2 9.2h7.6z"/></svg></span> Full access <span class="chevron" style="display:inline-flex;vertical-align:middle"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></span></span>
+              <span class="cc-full" title="Access level"><span style="display:inline-flex;vertical-align:middle"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.4 7.2H22l-6.2 4.5 2.4 7.3L12 16.5 5.8 21l2.4-7.3L2 9.2h7.6z"/></svg></span> Full access <span class="chevron" style="display:inline-flex;vertical-align:middle"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></span></span>
             </div>
             <div class="cc-right">
               <span class="dot dot-off" style="width:10px;height:10px;opacity:.5"></span>
@@ -319,7 +317,7 @@
     <div id="auth-backdrop"></div>
     <div id="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
       <div class="auth-head">
-        <div class="auth-logo" style="display:grid;place-items:center;background:#fff;padding:4px;border-radius:10px;overflow:hidden"><img src="./meteor-logo.png" width="28" height="28" style="object-fit:contain;display:block" alt="Meteor logo" /></div>
+        <div class="auth-logo"><img src="./meteor-logo.png" width="28" height="28" style="object-fit:contain;display:block" alt="Meteor logo" /></div>
         <div>
           <h2 id="auth-title">Welcome to Meteor</h2>
           <p class="auth-sub">Sign in to continue — Supabase authentication required</p>
@@ -348,7 +346,7 @@
         <div id="auth-error" class="form-error hidden"></div>
         <div id="auth-ok" class="edit-ok hidden" style="font-size:12px"></div>
         <div class="auth-actions">
-          <span id="auth-extra-hint" style="font-size:11px;color:var(--dim2)"></span>
+          <span id="auth-extra-hint" style="font-size:12px;color:var(--dim2)"></span>
           <span class="spacer"></span>
           <button id="auth-submit" type="submit" class="btn-primary">Sign in</button>
         </div>
@@ -372,16 +370,16 @@
           <span class="settings-icon" style="display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 009 15a1.65 1.65 0 001-1.51V13a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82-.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 009 9a1.65 1.65 0 001-1.51V7a2 2 0 014 0v.09a1.65 1.65 0 001 1.51z"/></svg></span>
           <div>
             <h2 id="settings-title">Settings</h2>
-            <p class="settings-sub">MCP servers · Model Context Protocol · JSON connect</p>
+            <p class="settings-sub">Plugins · extend Meteor with tools · JSON connect</p>
           </div>
         </div>
         <div class="settings-head-actions">
-          <span id="mcp-count" class="c-pill">0 servers</span>
+          <span id="mcp-count" class="c-pill">0 plugins</span>
           <button id="settings-close" class="btn-icon" title="Close (Esc)" style="display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
         </div>
       </header>
       <div class="settings-tabs">
-        <button class="settings-tab active" data-tab="servers">Servers</button>
+        <button class="settings-tab active" data-tab="servers">Plugins</button>
         <button class="settings-tab" data-tab="json">JSON</button>
         <span class="spacer"></span>
         <span class="settings-hint">Stored in <code>~/.config/meteor/config.json</code></span>
@@ -397,7 +395,7 @@
         <div id="mcp-list" class="mcp-list"></div>
         <form id="mcp-form" class="mcp-form hidden" autocomplete="off" spellcheck="false">
           <div class="mcp-form-head">
-            <h3 id="mcp-form-title">New MCP server</h3>
+            <h3 id="mcp-form-title">New plugin</h3>
             <button type="button" id="mcp-form-cancel" class="btn-icon" title="Cancel" style="display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
           </div>
           <div class="mcp-form-grid">
@@ -448,13 +446,13 @@
             <span id="mcp-form-error" class="form-error"></span>
             <span class="spacer"></span>
             <button type="button" id="mcp-form-delete" class="btn-deny hidden">Delete</button>
-            <button type="submit" id="mcp-form-save" class="btn-primary">Save server</button>
+            <button type="submit" id="mcp-form-save" class="btn-primary">Save plugin</button>
           </div>
         </form>
         <div id="mcp-empty" class="mcp-empty hidden">
           <div class="empty-icon" style="display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg></div>
-          <div class="empty-title">No MCP servers yet</div>
-          <div class="empty-sub">Create one with the form above or paste JSON in the <b>JSON</b> tab.</div>
+          <div class="empty-title">No plugins yet</div>
+          <div class="empty-sub">Add a plugin with the form above or paste MCP JSON in the <b>JSON</b> tab.</div>
         </div>
       </div>
       <div id="settings-tab-json" class="settings-body hidden">
@@ -487,7 +485,7 @@
     <div id="changelog-backdrop"></div>
     <div id="changelog-panel" role="dialog" aria-modal="true" aria-labelledby="changelog-title">
       <header class="changelog-head">
-        <div class="auth-logo" style="display:grid;place-items:center;background:#fff;padding:4px;border-radius:10px;overflow:hidden;flex-shrink:0"><img src="./meteor-logo.png" width="28" height="28" style="object-fit:contain;display:block" alt="Meteor logo" /></div>
+        <div class="auth-logo"><img src="./meteor-logo.png" width="28" height="28" style="object-fit:contain;display:block" alt="Meteor logo" /></div>
         <div style="min-width:0">
           <h2 id="changelog-title">What's new</h2>
           <p class="changelog-sub" id="changelog-sub"></p>

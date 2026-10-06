@@ -9,10 +9,10 @@ import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS } from "../src/m
 import { complete, ZenError, type Message } from "../src/zen.js";
 import { loadMcpServers, saveMcpServers, validateMcpServers, type McpServerConfig } from "../src/config.js";
 import { resolveApiKey, isUsingFreeTier, resolveModelKey, modelKeyHint } from "../src/config.js";
-import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, resetQuota, QuotaExceededError } from "../src/quota.js";
+import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, resetQuota, QuotaExceededError, formatTimeRemaining, FREE_TIER_TOKEN_LIMIT, type QuotaStatus } from "../src/quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "../src/web.js";
 import { scanWorkspace, writeFileInWorkspace } from "./workspace.js";
-import { authSignUp, authSignIn, authSignOut, authGetSession, authGetUser, isSupabaseConfigured, getProfileAvatar, getProfile, listProjects, createProject, getProject, updateProject, deleteProject, saveProjectMessages, loadProjectMessages } from "./supabase.js";
+import { authSignUp, authSignIn, authSignOut, authGetSession, authGetUser, isSupabaseConfigured, getProfileAvatar, getProfile, listProjects, createProject, getProject, updateProject, deleteProject, saveProjectMessages, loadProjectMessages, quotaGetServer, quotaRecordServer, quotaResetServer, type ServerQuotaState } from "./supabase.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -155,7 +155,7 @@ ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string;
   const apiKey = resolveModelKey(proModel.provider);
   if (!apiKey) throw new Error(`No API key for title generation. ${modelKeyHint(proModel.provider)}`);
   const isFree = isUsingFreeTier(undefined, proModel.provider);
-  checkQuotaOrThrow(isFree);
+  await checkQuotaOrThrowServer(isFree);
   try {
     const result = await complete({
       apiKey,
@@ -170,7 +170,7 @@ ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string;
       stream: false,
       reasoningEffort: "low",
     });
-    if (result.usage) recordTokenUsage(result.usage.totalTokens, isFree);
+    if (result.usage) await recordTokenUsageServer(result.usage.totalTokens, isFree);
     let title = (result.text || "").trim();
     // sanitize: strip markdown (## headings, **bold**, *italic*), quotes, newlines, trailing period, limit length
     title = title.replace(/^#{1,6}\s+/, "").replace(/^\*{1,3}\s*|\s*\*{1,3}$/g, "").replace(/^_{1,3}\s*|\s*_{1,3}$/g, "");
@@ -219,7 +219,7 @@ ipcMain.handle(
       if (!authSess.user) throw new Error("Not authenticated — please sign in to use Meteor.");
 
       const isFree = isUsingFreeTier(payload.apiKey, model.provider);
-      checkQuotaOrThrow(isFree);
+      await checkQuotaOrThrowServer(isFree);
 
       const allowed: string[] = [...REASONING_EFFORTS];
       const reasoningEffort = payload.reasoningEffort && allowed.includes(payload.reasoningEffort) ? payload.reasoningEffort : undefined;
@@ -295,7 +295,7 @@ ipcMain.handle(
         });
         finalText = result.text;
         if (result.reasoning) finalReasoning = finalReasoning ? finalReasoning + "\n" + result.reasoning : result.reasoning;
-        if (result.usage) recordTokenUsage(result.usage.totalTokens, isFree);
+        if (result.usage) await recordTokenUsageServer(result.usage.totalTokens, isFree);
         if (result.toolCalls.length === 0) break;
         // Notify renderer of tool calls
         for (const tc of result.toolCalls) {
@@ -340,7 +340,7 @@ ipcMain.handle(
       send("meteor:done", {
         text: finalText,
         reasoning: finalReasoning || undefined,
-        quota: getQuotaStatus(isFree),
+        quota: await getQuotaStatusServerAware(isFree),
       });
       finish();
     } catch (err) {
@@ -358,11 +358,58 @@ ipcMain.handle(
   },
 );
 
+// ── Server-side quota (meteor_quotas in Supabase) ──
+// Prefer the Supabase-backed quota — it persists across reinstalls and can't be
+// reset by deleting local files. Falls back to the local file quota when the
+// server is unreachable or the user isn't authenticated.
+function statusFromServer(s: ServerQuotaState, isFreeTier: boolean): QuotaStatus {
+  const now = Date.now();
+  const elapsed = Math.max(0, now - s.windowStartMs);
+  const resetsInMs = Math.max(0, s.windowMs - elapsed);
+  const used = Math.max(0, Number(s.tokensUsed) || 0);
+  const limit = Number(s.limit) || FREE_TIER_TOKEN_LIMIT;
+  return {
+    limit,
+    used,
+    remaining: Math.max(0, limit - used),
+    windowStart: s.windowStartMs,
+    resetAt: s.windowStartMs + s.windowMs,
+    resetsInMs,
+    timeRemainingFormatted: formatTimeRemaining(resetsInMs),
+    percentUsed: limit > 0 ? Math.min(100, Math.round((used / limit) * 1000) / 10) : 100,
+    isExceeded: isFreeTier && used >= limit,
+    isFreeTier,
+  };
+}
+
+async function getQuotaStatusServerAware(isFree: boolean): Promise<QuotaStatus> {
+  const server = await quotaGetServer();
+  return server ? statusFromServer(server, isFree) : getQuotaStatus(isFree);
+}
+
+async function checkQuotaOrThrowServer(isFree: boolean): Promise<void> {
+  if (!isFree) return;
+  const server = await quotaGetServer();
+  if (server) {
+    const status = statusFromServer(server, true);
+    if (status.isExceeded) throw new QuotaExceededError(status);
+    return;
+  }
+  checkQuotaOrThrow(isFree);
+}
+
+async function recordTokenUsageServer(tokens: number, isFree: boolean): Promise<QuotaStatus> {
+  const local = recordTokenUsage(tokens, isFree);
+  const server = await quotaRecordServer(tokens);
+  return server ? statusFromServer(server, isFree) : local;
+}
+
 ipcMain.handle("quota:getStatus", async () => {
-  return getQuotaStatus(isUsingFreeTier());
+  return getQuotaStatusServerAware(isUsingFreeTier());
 });
 
 ipcMain.handle("quota:reset", async () => {
+  await quotaResetServer();
   return resetQuota();
 });
 

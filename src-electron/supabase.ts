@@ -207,6 +207,45 @@ export async function authGetUser(): Promise<User | null> {
   return mockGetUser();
 }
 
+// ── Server-side quota (meteor_quotas table, security definer RPCs) ──
+export interface ServerQuotaState {
+  tokensUsed: number;
+  windowStartMs: number;
+  limit: number;
+  windowMs: number;
+}
+
+export async function quotaGetServer(): Promise<ServerQuotaState | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  try {
+    const { data, error } = await client.rpc("meteor_quota_get");
+    if (error || !data) return null;
+    const s = data as ServerQuotaState;
+    return typeof s.tokensUsed === "number" && typeof s.windowStartMs === "number" ? s : null;
+  } catch { return null; }
+}
+
+export async function quotaRecordServer(tokens: number): Promise<ServerQuotaState | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  try {
+    const { data, error } = await client.rpc("meteor_quota_record", { p_tokens: Math.max(0, Math.round(tokens)) });
+    if (error || !data) return null;
+    const s = data as ServerQuotaState;
+    return typeof s.tokensUsed === "number" && typeof s.windowStartMs === "number" ? s : null;
+  } catch { return null; }
+}
+
+export async function quotaResetServer(): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const { error } = await client.rpc("meteor_quota_reset");
+    return !error;
+  } catch { return false; }
+}
+
 export async function getProfileAvatar(userId: string): Promise<string | null> {
   const client = getSupabaseClient();
   if (!client) return null;
