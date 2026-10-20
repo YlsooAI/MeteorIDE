@@ -10,44 +10,41 @@ export interface MeteorModel {
   provider: Provider;
   baseUrl?: string;
   description: string;
+  /** Input types the model accepts besides text. Uploads of other types are blocked in the app. */
+  inputs: Array<"image" | "video" | "file">;
 }
 
 // All models are served through OpenRouter (OpenAI-compatible, provider/model ids).
 export const OPENROUTER_URL = "https://openrouter.ai/api/v1";
-// For now all three Sunlight tiers use the same free model.
-const SUNLIGHT_MODEL = "minimax/minimax-m3.1-flash:free";
 
 export const MODELS: Record<string, MeteorModel> = {
   "sunlight-2": {
     key: "sunlight-2",
     name: "Sunlight 2",
-    zenId: `openrouter/${SUNLIGHT_MODEL}`,
-    apiModel: SUNLIGHT_MODEL,
+    zenId: "openrouter/minimax/minimax-m3.1-flash:free",
+    apiModel: "minimax/minimax-m3.1-flash:free",
     protocol: "chat",
     provider: "openrouter",
     baseUrl: OPENROUTER_URL,
     description: "Sunlight 2",
+    inputs: ["image", "video", "file"],
   },
   "sunlight-2-pro": {
     key: "sunlight-2-pro",
     name: "Sunlight 2 Pro",
-    zenId: `openrouter/${SUNLIGHT_MODEL}`,
-    apiModel: SUNLIGHT_MODEL,
+    zenId: "openrouter/xingchen-agi/xing4.0-29b-a4b:free",
+    apiModel: "xingchen-agi/xing4.0-29b-a4b:free",
     protocol: "chat",
     provider: "openrouter",
     baseUrl: OPENROUTER_URL,
     description: "Sunlight 2 Pro",
+    inputs: [],
   },
-  "sunlight-2-lite": {
-    key: "sunlight-2-lite",
-    name: "Sunlight 2 Lite",
-    zenId: `openrouter/${SUNLIGHT_MODEL}`,
-    apiModel: SUNLIGHT_MODEL,
-    protocol: "chat",
-    provider: "openrouter",
-    baseUrl: OPENROUTER_URL,
-    description: "Sunlight 2 Lite",
-  },
+};
+
+// Models that were removed, mapped to their replacement so saved settings keep working.
+const RETIRED_MODELS: Record<string, string> = {
+  "sunlight-2-lite": "sunlight-2",
 };
 
 // Reasoning efforts supported by Sunlight 2 and Sunlight 2 Pro (same set).
@@ -68,6 +65,7 @@ export function resolveModel(input: string | undefined): MeteorModel {
   if (!input) return MODELS[DEFAULT_MODEL];
   const normalized = input.toLowerCase().replace(/^meteor\//, "");
   if (MODELS[normalized]) return MODELS[normalized];
+  if (RETIRED_MODELS[normalized]) return MODELS[RETIRED_MODELS[normalized]];
   for (const m of Object.values(MODELS)) {
     if (
       normalized === m.name.toLowerCase() ||

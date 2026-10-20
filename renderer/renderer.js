@@ -2377,6 +2377,18 @@ async function sendCurrent() {
     const expanded = window.meteorExt?.expandCommand?.(text);
     if (expanded) text = expanded;
   }
+  // block uploads the selected model can't read (e.g. a text-only model)
+  if (pendingImages.length) {
+    const model = models.find((m) => m.key === currentModel);
+    const accepts = new Set(model?.inputs || ["image", "video", "file"]);
+    const need = { image: "image", video: "video", pdf: "file" };
+    const blocked = [...new Set(pendingImages.filter((p) => !accepts.has(need[p.kind])).map((p) => p.kind === "pdf" ? "PDFs" : p.kind + "s"))];
+    if (blocked.length) {
+      const alt = models.find((m) => blocked.every((b) => (m.inputs || []).includes(need[b === "PDFs" ? "pdf" : b.slice(0, -1)])));
+      uploadNotice(`${model?.name || "This model"} can't read ${blocked.join(" or ")}.${alt ? ` Switch to ${alt.name} to send them.` : ""}`);
+      return;
+    }
+  }
   // capture uploads + @attachments before clearing
   const imgs = [...pendingImages];
   const sentMedia = imgs.map((i) => ({ kind: i.kind, url: i.dataUrl, name: i.name }));
@@ -2874,6 +2886,24 @@ function setSidebarVisible(v){
   }
 }
 function toggleSidebar(){ setSidebarVisible(!sidebarVisible); }
+
+// Account menu (click your name): quota left, settings, sign out, version.
+function initProfileMenu(){
+  const btn = document.getElementById("profile-btn");
+  const menu = document.getElementById("profile-menu");
+  if (!btn || !menu) return;
+  const setOpen = (open) => {
+    menu.classList.toggle("hidden", !open);
+    btn.setAttribute("aria-expanded", String(open));
+    if (open) refreshQuotaStatus();
+  };
+  btn.addEventListener("click", (e) => { e.stopPropagation(); setOpen(menu.classList.contains("hidden")); });
+  document.addEventListener("click", (e) => { if (!menu.classList.contains("hidden") && !menu.contains(e.target) && !btn.contains(e.target)) setOpen(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.classList.contains("hidden")) { setOpen(false); btn.focus(); } });
+  document.getElementById("pm-settings")?.addEventListener("click", () => { setOpen(false); document.getElementById("settings-btn")?.click(); });
+  document.getElementById("pm-extensions")?.addEventListener("click", () => { setOpen(false); document.getElementById("btn-extensions")?.click(); });
+  document.getElementById("auth-logout")?.addEventListener("click", () => setOpen(false));
+}
 
 let editorVisible = localStorage.getItem("meteor:editorVisible") !== "false";
 function updateDockHidden(){
@@ -3550,36 +3580,26 @@ async function refreshQuotaStatus(status) {
 
     if (!tierEl || !barEl || !usageEl) return;
 
+    if (usageEl) usageEl.textContent = `${status.used} / ${status.limit}`;
+    tierEl.style.color = "";
     if (!status.isFreeTier) {
-      tierEl.textContent = "Custom Key";
-      tierEl.style.color = "#4cd964";
-      if (resetEl) resetEl.textContent = "Unlimited";
+      tierEl.textContent = "Your API key";
+      if (percentEl) percentEl.textContent = "No limit";
       barEl.style.width = "100%";
-      barEl.style.background = "#4cd964";
-      usageEl.textContent = `${(status.used / 1000).toFixed(1)}k tokens used`;
-      if (percentEl) percentEl.textContent = "Pro";
-      if (container) container.title = "Using custom API key — unlimited tokens (bypasses 1M/5h free quota)";
+      barEl.style.background = "var(--y-positive)";
+      if (resetEl) resetEl.textContent = "Requests use your own key";
+      if (container) container.title = "";
       return;
     }
 
-    tierEl.textContent = "Free Quota";
-    tierEl.style.color = status.isExceeded ? "#ff3b30" : "var(--text)";
-    if (resetEl) resetEl.textContent = `resets in ${status.timeRemainingFormatted}`;
-    const pct = Math.min(100, Math.max(0, status.percentUsed));
-    barEl.style.width = `${pct}%`;
-    barEl.style.background = status.isExceeded
-      ? "#ff3b30"
-      : pct > 85
-        ? "#ff9500"
-        : "linear-gradient(90deg, #ff6a2a, #ff9f43)";
-
-    const usedFormatted = (status.used / 1000).toFixed(0);
-    const limitFormatted = (status.limit / 1000000).toFixed(0);
-    usageEl.textContent = `${usedFormatted}k / ${limitFormatted}M tokens`;
-    if (percentEl) percentEl.textContent = `${pct}%`;
-    if (container) {
-      container.title = `Free tier: ${status.used.toLocaleString()} / ${status.limit.toLocaleString()} tokens used in current 5-hour window. Resets in ${status.timeRemainingFormatted}. Click to refresh.`;
-    }
+    // Show what's left of the 5-hour window, not raw token counts
+    const left = Math.max(0, Math.min(100, Math.round(100 - status.percentUsed)));
+    tierEl.textContent = "5-hour limit";
+    if (percentEl) percentEl.textContent = status.isExceeded ? "Limit reached" : `${left}% left`;
+    barEl.style.width = `${status.isExceeded ? 0 : left}%`;
+    barEl.style.background = status.isExceeded || left <= 5 ? "var(--y-negative)" : left <= 15 ? "var(--y-warning)" : "var(--y-blue)";
+    if (resetEl) resetEl.textContent = `Resets in ${status.timeRemainingFormatted}`;
+    if (container) container.title = "";
   } catch (e) {
     console.warn("refreshQuotaStatus error:", e);
   }
@@ -3973,6 +3993,7 @@ async function init() {
   if (navigator.platform.toLowerCase().includes("mac")) document.body.classList.add("platform-mac");
   setSidebarVisible(sidebarVisible);
   document.getElementById("sidebar-toggle")?.addEventListener("click", toggleSidebar);
+  initProfileMenu();
 
   // gate: must sign in via Supabase before using Meteor
   try { initAuth(); } catch(e){ console.error("initAuth", e); }

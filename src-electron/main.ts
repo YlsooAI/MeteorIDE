@@ -62,6 +62,7 @@ ipcMain.handle("meteor:info", async () => {
       name: m.name,
       description: m.description,
       provider: m.provider,
+      inputs: m.inputs,
     })),
     auth: {
       isAuthenticated: Boolean(sess.user),

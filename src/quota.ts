@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { configDir } from "./config.js";
 
-export const FREE_TIER_TOKEN_LIMIT = 1_000_000; // 1 Million tokens
+export const FREE_TIER_TOKEN_LIMIT = 10_000_000; // 10 million tokens per 5-hour window
 export const FREE_TIER_WINDOW_MS = 5 * 60 * 60 * 1000; // 5 hours in ms
 
 export interface QuotaState {
@@ -130,7 +130,7 @@ export class QuotaExceededError extends Error {
     const timeLeft = formatTimeRemaining(status.resetsInMs);
     super(
       message ||
-        `Free tier quota exceeded: 1,000,000 tokens limit reached for this 5-hour period. Quota resets in ${timeLeft} (at ${resetTime}). Set your own API key with 'meteor auth set <key>' or wait for reset.`,
+        `Free tier quota exceeded: ${FREE_TIER_TOKEN_LIMIT.toLocaleString("en-US")} token limit reached for this 5-hour period. Quota resets in ${timeLeft} (at ${resetTime}). Set your own API key with 'meteor auth set <key>' or wait for reset.`,
     );
     this.name = "QuotaExceededError";
   }

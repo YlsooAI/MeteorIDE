@@ -60,44 +60,46 @@
       </div>
 
       <div class="sb-footer">
-        <div id="sb-quota" title="Meteor Token Quota (1M tokens / 5h)">
-          <div class="quota-top">
-            <span class="quota-tier">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              <span id="quota-tier-label">Free Quota</span>
-            </span>
-            <span id="quota-reset-label" class="quota-meta">5h window</span>
+        <div id="profile-menu" class="profile-menu hidden" role="dialog" aria-label="Account">
+          <div class="pm-account">
+            <span id="auth-user-email">••••••••</span>
+            <button id="toggle-email" class="icon-mini" title="Show email" aria-label="Show email" style="display:none">
+              <svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg class="eye-closed hidden" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17.94 17.94A10.94 10.94 0 0112 19C5 19 1 12 1 12a20.3 20.3 0 015.06-6.94"/><path d="M9.53 9.53A3 3 0 0012 15a3 3 0 002.47-1.47"/><path d="M1 1l22 22"/></svg>
+            </button>
           </div>
-          <div class="quota-track"><div id="quota-bar"></div></div>
-          <div class="quota-meta quota-bottom">
-            <span id="quota-usage-text">0 / 1M tokens</span>
-            <span id="quota-percent-text">0%</span>
+          <div id="sb-quota" class="pm-quota">
+            <div class="quota-top">
+              <span id="quota-tier-label">5-hour limit</span>
+              <span id="quota-percent-text">—</span>
+            </div>
+            <div class="quota-track"><div id="quota-bar"></div></div>
+            <span id="quota-reset-label" class="quota-meta">Resets every 5 hours</span>
+            <span id="quota-usage-text" hidden></span>
+          </div>
+          <div class="pm-sep"></div>
+          <button class="pm-item" id="pm-settings" type="button">Settings</button>
+          <button class="pm-item" id="pm-extensions" type="button">Extensions</button>
+          <button class="pm-item pm-danger hidden" id="auth-logout" type="button">Sign out</button>
+          <div class="pm-sep"></div>
+          <div class="version-row">
+            <span id="update-footer-version" title="Show what's new">v0.2.20</span>
+            <span id="update-footer-status"></span>
+            <button id="check-update-btn" title="Check for updates">Check</button>
           </div>
         </div>
         <div class="user-row">
-          <span id="auth-avatar" class="avatar">
-            <img id="auth-avatar-img" class="hidden" alt="" />
-            <span id="auth-avatar-fallback">•</span>
-          </span>
-          <div class="user-meta">
+          <button id="profile-btn" class="profile-btn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="profile-menu">
+            <span id="auth-avatar" class="avatar">
+              <img id="auth-avatar-img" class="hidden" alt="" />
+              <span id="auth-avatar-fallback">•</span>
+            </span>
             <span id="auth-user-name" class="user-name">Not signed in</span>
-            <div class="user-sub">
-              <span id="auth-user-email">••••••••</span>
-              <button id="toggle-email" class="icon-mini" title="Show email" aria-label="Show email" style="display:none">
-                <svg class="eye-open" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
-                <svg class="eye-closed hidden" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17.94 17.94A10.94 10.94 0 0112 19C5 19 1 12 1 12a20.3 20.3 0 015.06-6.94"/><path d="M9.53 9.53A3 3 0 0012 15a3 3 0 002.47-1.47"/><path d="M1 1l22 22"/></svg>
-              </button>
-            </div>
-          </div>
+            <svg class="profile-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+          </button>
           <button id="key-dot" class="dot dot-off" title="API key status" aria-label="API key status"></button>
           <button id="theme-toggle" class="icon-mini" title="Theme" aria-hidden="true" tabindex="-1"></button>
           <button id="settings-btn" class="icon-mini" title="Settings" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></button>
-          <button id="auth-logout" class="icon-mini hidden" title="Sign out" aria-label="Sign out"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
-        </div>
-        <div class="version-row">
-          <span id="update-footer-version" title="Show what's new">v0.2.19</span>
-          <span id="update-footer-status"></span>
-          <button id="check-update-btn" title="Check for updates">Check</button>
         </div>
         <div style="display:none"><input id="filter-files" /></div>
       </div>

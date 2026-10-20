@@ -7,7 +7,7 @@ import { clearApiKey, loadConfig, resolveApiKey, resetConfig, saveConfig, isUsin
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, formatTimeRemaining, QuotaExceededError } from "./quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "./web.js";
 
-const VERSION = "0.2.19";
+const VERSION = "0.2.20";
 const DEFAULT_SYSTEM =
   "You are Meteor, a helpful assistant. Answer concisely. You can use full markdown: headings, bold, italic, lists, tables, blockquotes, links, and fenced code blocks with language tags. Prefer markdown for structure and readability.\n\nYou have built-in web tools:\n- fetch_url: fetch the live readable text or markdown content of any URL or link the user provides or asks about.\n- search_internet: search the internet via Browserbase to find up-to-date documentation, news, facts, and code examples whenever current information is needed. Use it proactively whenever fresh context is required.";
 
@@ -28,7 +28,7 @@ const USAGE = `Meteor — AI in your terminal
 Usage
   meteor [prompt...]              One-shot question (streams the answer)
   meteor chat [-m <model>]        Interactive session
-  meteor quota                    Show your free tier quota usage (1M tokens / 5h)
+  meteor quota                    Show your free tier quota usage (10M tokens / 5h)
   meteor build                    Build the project (emits to dist/)
   meteor plan                     Plan the build — preview without writing files
   meteor models                   List available models
@@ -352,9 +352,9 @@ function showQuotaAction(): void {
   console.log(`\x1b[90m${"─".repeat(45)}\x1b[0m`);
   if (!isFree) {
     console.log(`  Tier:        \x1b[32mCustom API Key (Unlimited)\x1b[0m`);
-    console.log(`  Allowance:   Unlimited (bypasses free 1M/5h quota)`);
+    console.log(`  Allowance:   Unlimited (bypasses free 10M/5h quota)`);
   } else {
-    console.log(`  Tier:        \x1b[36mFree Tier (1,000,000 tokens / 5 hours)\x1b[0m`);
+    console.log(`  Tier:        \x1b[36mFree Tier (10,000,000 tokens / 5 hours)\x1b[0m`);
   }
   console.log(`  Usage:       \x1b[1m${status.used.toLocaleString()} / ${status.limit.toLocaleString()}\x1b[0m tokens (${status.percentUsed}%)`);
   console.log(`  Progress:    \x1b[33m${bar}\x1b[0m`);

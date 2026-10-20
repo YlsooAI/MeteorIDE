@@ -143,7 +143,7 @@ create policy "Users can modify own meteor quota"
 -- Stored procedure to atomically check and consume token quota in the 5-hour window
 create or replace function public.consume_meteor_tokens(
   p_tokens integer,
-  p_max_limit bigint default 1000000,
+  p_max_limit bigint default 10000000,
   p_window_hours integer default 5
 )
 returns jsonb as $$
