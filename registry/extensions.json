@@ -1,0 +1,82 @@
+{
+  "extensions": [
+    {
+      "id": "code-review",
+      "name": "Code review",
+      "version": "1.0.0",
+      "description": "Adds /review to get a focused review of your code or an attached file.",
+      "author": "Meteor",
+      "commands": [
+        {
+          "name": "review",
+          "description": "Review code for bugs, security and clarity",
+          "prompt": "Review the following code. List concrete problems first (bugs, security issues, unhandled errors), ordered by severity, each with the line or snippet and a suggested fix. Then list smaller clarity or style improvements. If the code looks fine, say so plainly.\n\n{{input}}"
+        }
+      ]
+    },
+    {
+      "id": "commit-writer",
+      "name": "Commit writer",
+      "version": "1.0.0",
+      "description": "Adds /commit to turn a diff or a description of your changes into a clear commit message.",
+      "author": "Meteor",
+      "commands": [
+        {
+          "name": "commit",
+          "description": "Write a commit message for your changes",
+          "prompt": "Write a Conventional Commits message for these changes. Use a subject line of 72 characters or fewer, then a short body explaining why the change was made. Do not invent changes that are not described.\n\n{{input}}"
+        }
+      ]
+    },
+    {
+      "id": "explain-code",
+      "name": "Explain code",
+      "version": "1.0.0",
+      "description": "Adds /explain for plain-language walkthroughs of code, errors and concepts.",
+      "author": "Meteor",
+      "commands": [
+        {
+          "name": "explain",
+          "description": "Explain code or an error in plain language",
+          "prompt": "Explain the following in plain language for someone who is new to it. Start with a one-sentence summary, then walk through the important parts step by step. Point out anything surprising.\n\n{{input}}"
+        }
+      ]
+    },
+    {
+      "id": "concise-mode",
+      "name": "Concise mode",
+      "version": "1.0.0",
+      "description": "Keeps answers short and direct by adding a style instruction to every chat.",
+      "author": "Meteor",
+      "instructions": "Keep answers short and direct. Lead with the answer or the code, skip preambles and recaps, and only explain when the user asks or when something is non-obvious."
+    },
+    {
+      "id": "memory",
+      "name": "Memory",
+      "version": "1.0.0",
+      "description": "A persistent knowledge-graph memory for Meteor, via the official MCP memory server. Mention @memory to use it.",
+      "author": "Model Context Protocol",
+      "homepage": "https://github.com/modelcontextprotocol/servers",
+      "mcpServers": {
+        "server": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-memory"]
+        }
+      }
+    },
+    {
+      "id": "sequential-thinking",
+      "name": "Sequential thinking",
+      "version": "1.0.0",
+      "description": "Step-by-step problem solving for hard tasks, via the official MCP sequential-thinking server.",
+      "author": "Model Context Protocol",
+      "homepage": "https://github.com/modelcontextprotocol/servers",
+      "mcpServers": {
+        "server": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+        }
+      }
+    }
+  ]
+}

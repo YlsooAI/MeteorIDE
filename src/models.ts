@@ -1,5 +1,5 @@
 export type Protocol = "chat" | "responses";
-export type Provider = "zen" | "mercury" | "tokenrouter" | "orcarouter" | "vercel";
+export type Provider = "zen" | "mercury" | "tokenrouter" | "orcarouter" | "openrouter";
 
 export interface MeteorModel {
   key: string;
@@ -12,38 +12,40 @@ export interface MeteorModel {
   description: string;
 }
 
-// All models are served through the Vercel AI Gateway (OpenAI-compatible, provider/model ids).
-export const VERCEL_AI_GATEWAY_URL = "https://ai-gateway.vercel.sh/v1";
+// All models are served through OpenRouter (OpenAI-compatible, provider/model ids).
+export const OPENROUTER_URL = "https://openrouter.ai/api/v1";
+// For now all three Sunlight tiers use the same free model.
+const SUNLIGHT_MODEL = "minimax/minimax-m3.1-flash:free";
 
 export const MODELS: Record<string, MeteorModel> = {
   "sunlight-2": {
     key: "sunlight-2",
     name: "Sunlight 2",
-    zenId: "vercel/xiaomi/mimo-v2.6-flash",
-    apiModel: "xiaomi/mimo-v2.6-flash",
+    zenId: `openrouter/${SUNLIGHT_MODEL}`,
+    apiModel: SUNLIGHT_MODEL,
     protocol: "chat",
-    provider: "vercel",
-    baseUrl: VERCEL_AI_GATEWAY_URL,
+    provider: "openrouter",
+    baseUrl: OPENROUTER_URL,
     description: "Sunlight 2",
   },
   "sunlight-2-pro": {
     key: "sunlight-2-pro",
     name: "Sunlight 2 Pro",
-    zenId: "vercel/alibaba/qwen3.8-omni-flash",
-    apiModel: "alibaba/qwen3.8-omni-flash",
+    zenId: `openrouter/${SUNLIGHT_MODEL}`,
+    apiModel: SUNLIGHT_MODEL,
     protocol: "chat",
-    provider: "vercel",
-    baseUrl: VERCEL_AI_GATEWAY_URL,
+    provider: "openrouter",
+    baseUrl: OPENROUTER_URL,
     description: "Sunlight 2 Pro",
   },
   "sunlight-2-lite": {
     key: "sunlight-2-lite",
     name: "Sunlight 2 Lite",
-    zenId: "vercel/inception/mercury-2",
-    apiModel: "inception/mercury-2",
+    zenId: `openrouter/${SUNLIGHT_MODEL}`,
+    apiModel: SUNLIGHT_MODEL,
     protocol: "chat",
-    provider: "vercel",
-    baseUrl: VERCEL_AI_GATEWAY_URL,
+    provider: "openrouter",
+    baseUrl: OPENROUTER_URL,
     description: "Sunlight 2 Lite",
   },
 };

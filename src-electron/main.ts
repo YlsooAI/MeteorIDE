@@ -12,6 +12,7 @@ import { resolveApiKey, isUsingFreeTier, resolveModelKey, modelKeyHint } from ".
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, resetQuota, QuotaExceededError, formatTimeRemaining, FREE_TIER_TOKEN_LIMIT, type QuotaStatus } from "../src/quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "../src/web.js";
 import { scanWorkspace, writeFileInWorkspace } from "./workspace.js";
+import { fetchRegistry, installExtension, listInstalled, uninstallExtension, validateManifest, describeManifest, parseManifestFile, extensionsDir, type ExtensionManifest } from "./extensions.js";
 import { authSignUp, authSignIn, authSignOut, authGetSession, authGetUser, isSupabaseConfigured, getProfileAvatar, getProfile, listProjects, createProject, getProject, updateProject, deleteProject, saveProjectMessages, loadProjectMessages, quotaGetServer, quotaRecordServer, quotaResetServer, type ServerQuotaState } from "./supabase.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1057,3 +1058,93 @@ async function testHttpMcp(cfg: McpServerConfig): Promise<void> {
     clearTimeout(t);
   }
 }
+
+// ── Extensions (declarative: MCP servers, slash commands, instructions) ──
+let lastRegistry: ExtensionManifest[] = [];
+
+async function confirmInstall(win: BrowserWindow | null, manifest: ExtensionManifest, source: string): Promise<boolean> {
+  const opts = {
+    type: "question" as const,
+    buttons: ["Install", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "Install extension",
+    message: `Install "${manifest.name}" ${manifest.version}?`,
+    detail: `${manifest.description}\n\nSource: ${source}\n\nThis extension will:\n${describeManifest(manifest)}\n\nOnly install extensions you trust — MCP servers run commands on your computer.`,
+  };
+  const res = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+  return res.response === 0;
+}
+
+ipcMain.handle("extensions:list", () => ({ installed: listInstalled() }));
+
+ipcMain.handle("extensions:registry", async () => {
+  const bundled = path.join(__dirname, "..", "..", "registry", "extensions.json");
+  const reg = await fetchRegistry(bundled);
+  lastRegistry = reg.entries;
+  const installed = new Map(listInstalled().map((e) => [e.id, e.version]));
+  return {
+    source: reg.source,
+    error: reg.error,
+    entries: reg.entries.map((e) => ({ ...e, installed: installed.has(e.id), installedVersion: installed.get(e.id) })),
+  };
+});
+
+ipcMain.handle("extensions:install", async (event, payload: { id: string }) => {
+  const manifest = lastRegistry.find((e) => e.id === payload.id);
+  if (!manifest) throw new Error("Extension not found in the store. Refresh and try again.");
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!(await confirmInstall(win, manifest, "Meteor extension store"))) return { cancelled: true };
+  const ext = installExtension(manifest, "store");
+  mcpToolsCache = null;
+  return { installed: ext };
+});
+
+ipcMain.handle("extensions:installFile", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const pick = await dialog.showOpenDialog(win!, {
+    title: "Choose meteor-extension.json",
+    properties: ["openFile"],
+    filters: [{ name: "Extension manifest", extensions: ["json"] }],
+  });
+  if (pick.canceled || !pick.filePaths[0]) return { cancelled: true };
+  const text = await readFile(pick.filePaths[0], "utf8");
+  const manifest = validateManifest(parseManifestFile(text));
+  if (!(await confirmInstall(win, manifest, pick.filePaths[0]))) return { cancelled: true };
+  const ext = installExtension(manifest, pick.filePaths[0]);
+  mcpToolsCache = null;
+  return { installed: ext };
+});
+
+ipcMain.handle("extensions:uninstall", (_e, payload: { id: string }) => {
+  uninstallExtension(payload.id);
+  mcpToolsCache = null;
+  return { ok: true };
+});
+
+ipcMain.handle("extensions:openFolder", async () => {
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(extensionsDir(), { recursive: true });
+  await shell.openPath(extensionsDir());
+  return { ok: true };
+});
+
+ipcMain.handle("extensions:openDocs", () => {
+  const docs = new BrowserWindow({
+    width: 980,
+    height: 820,
+    title: "Meteor — Extension docs",
+    autoHideMenuBar: true,
+    backgroundColor: "#ffffff",
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  docs.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\//.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  docs.webContents.on("will-navigate", (e, url) => {
+    if (!url.startsWith("file://")) { e.preventDefault(); if (/^https:\/\//.test(url)) shell.openExternal(url); }
+  });
+  docs.loadFile(path.join(__dirname, "..", "..", "renderer", "docs", "extensions.html"));
+  return { ok: true };
+});

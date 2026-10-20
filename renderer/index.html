@@ -21,6 +21,10 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="7"/><path d="M16 16l4 4"/></svg>
           Search <span class="sb-kbd">⌘ K</span>
         </button>
+        <button class="sb-item" id="btn-extensions">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 3h4v3a2 2 0 104 0V3h3v7h-3a2 2 0 100 4h3v7h-7v-3a2 2 0 10-4 0v3H3v-7h3a2 2 0 100-4H3V3z" transform="scale(.9) translate(1.3 1.3)"/></svg>
+          Extensions
+        </button>
       </nav>
       <div id="search-wrap" class="hidden">
         <div class="search-field">
@@ -96,7 +100,7 @@
           </div>
         </div>
         <div class="version-row">
-          <span id="update-footer-version" title="Show what's new">v0.2.16</span>
+          <span id="update-footer-version" title="Show what's new">v0.2.17</span>
           <span id="update-footer-status"></span>
           <button id="check-update-btn" title="Check for updates">Check</button>
         </div>
@@ -480,6 +484,34 @@
     </div>
   </div>
 
+  <!-- Extensions store -->
+  <div id="ext-overlay" class="hidden" aria-hidden="true">
+    <div id="ext-backdrop"></div>
+    <div id="ext-panel" role="dialog" aria-modal="true" aria-labelledby="ext-title">
+      <header class="settings-head">
+        <div>
+          <h2 id="ext-title">Extensions</h2>
+          <p class="settings-sub">Add slash commands, instructions and MCP tools to Meteor.</p>
+        </div>
+        <div class="settings-head-actions">
+          <button id="ext-docs" type="button" class="ext-pill">Build an extension</button>
+          <button id="ext-close" class="btn-icon" title="Close (Esc)" style="display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+      </header>
+      <div class="settings-tabs">
+        <button class="ext-tab settings-tab active" data-ext-tab="store">Store</button>
+        <button class="ext-tab settings-tab" data-ext-tab="installed">Installed <span id="ext-installed-count" class="ext-count">0</span></button>
+        <span class="spacer"></span>
+        <button id="ext-install-file" type="button" class="ext-pill">Install from file</button>
+        <button id="ext-open-folder" type="button" class="ext-pill">Open folder</button>
+      </div>
+      <div class="settings-body" id="ext-body">
+        <div id="ext-status" class="ext-status hidden"></div>
+        <div id="ext-grid" class="ext-grid"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Changelog (shows once after each update) -->
   <div id="changelog-overlay" class="hidden" aria-hidden="true">
     <div id="changelog-backdrop"></div>
@@ -503,5 +535,6 @@
   </div>
 
   <script src="./renderer.js"></script>
+  <script src="./extensions.js"></script>
 </body>
 </html>

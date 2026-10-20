@@ -1,6 +1,6 @@
 {
   "name": "meteor",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "Meteor — AI coding assistant (CLI + Electron app)",
   "type": "module",
   "license": "MIT",
@@ -41,7 +41,8 @@
       "bin/**/*",
       "package.json",
       "src-electron/preload.cjs",
-      "renderer/**/*"
+      "renderer/**/*",
+      "registry/**/*"
     ],
     "directories": {
       "output": "release"

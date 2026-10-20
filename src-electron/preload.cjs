@@ -114,6 +114,15 @@ contextBridge.exposeInMainWorld("meteorAPI", {
     openRepo: () => ipcRenderer.invoke("updater:openRepo"),
     restart: () => ipcRenderer.invoke("app:restart"),
   },
+  extensions: {
+    list: () => ipcRenderer.invoke("extensions:list"),
+    registry: () => ipcRenderer.invoke("extensions:registry"),
+    install: (id) => ipcRenderer.invoke("extensions:install", { id }),
+    installFile: () => ipcRenderer.invoke("extensions:installFile"),
+    uninstall: (id) => ipcRenderer.invoke("extensions:uninstall", { id }),
+    openFolder: () => ipcRenderer.invoke("extensions:openFolder"),
+    openDocs: () => ipcRenderer.invoke("extensions:openDocs"),
+  },
   quota: {
     getStatus: () => ipcRenderer.invoke("quota:getStatus"),
     reset: () => ipcRenderer.invoke("quota:reset"),

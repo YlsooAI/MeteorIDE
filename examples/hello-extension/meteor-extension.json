@@ -1,0 +1,15 @@
+{
+  "id": "hello-extension",
+  "name": "Hello extension",
+  "version": "0.1.0",
+  "description": "A minimal example: one slash command and one instruction.",
+  "author": "You",
+  "commands": [
+    {
+      "name": "hello",
+      "description": "Greet the user in a friendly way",
+      "prompt": "Say hello and then help with this: {{input}}"
+    }
+  ],
+  "instructions": "When the user says hello, answer in one friendly sentence."
+}

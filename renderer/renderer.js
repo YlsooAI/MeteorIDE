@@ -1568,6 +1568,10 @@ function singleFileContext() {
 }
 
 function buildSystemMessage() {
+  return buildSystemMessageBase() + (window.meteorExt?.instructions?.() || "");
+}
+
+function buildSystemMessageBase() {
   const modeNote = buildMode === "plan"
     ? "\n\n# Mode: PLAN — do NOT write files. Describe the build plan, list each file that would be created/modified with its path, and show snippets with normal ``` fences (not write:). The user will switch to Build to actually write."
     : "\n\n# Mode: BUILD — you may write files using write: blocks. New files will be created automatically, overwrites will ask for confirmation.";
@@ -2186,7 +2190,7 @@ async function sendCurrent() {
     return;
   }
   const raw = els.input.value;
-  const text = raw.trim();
+  let text = raw.trim();
   const hasImages = pendingImages.length > 0;
   if ((!text && !hasImages && !attachedFiles.length) || busy) return;
   // slash commands only when no images
@@ -2200,7 +2204,7 @@ async function sendCurrent() {
     if (text === "/help") {
       els.input.value = "";
       autoSizeInput();
-      addMsg("system", "/model [name] — switch model (sunlight-2, sunlight-2-pro)\n/reasoning [default|minimal|low|medium|high|xhigh] — set reasoning effort (current: " + effortLabel(currentReasoningEffort) + ")\n/clear — clear chat\n/help — show this");
+      addMsg("system", "/model [name] — switch model (sunlight-2, sunlight-2-pro)\n/reasoning [default|minimal|low|medium|high|xhigh] — set reasoning effort (current: " + effortLabel(currentReasoningEffort) + ")\n/clear — clear chat\n/help — show this" + (window.meteorExt?.helpLines?.() || ""));
       return;
     }
     if (text === "/model" || text.startsWith("/model ")) {
@@ -2244,6 +2248,11 @@ async function sendCurrent() {
       }
       return;
     }
+  }
+  // extension slash commands expand into their prompt template
+  if (!hasImages) {
+    const expanded = window.meteorExt?.expandCommand?.(text);
+    if (expanded) text = expanded;
   }
   // capture images + @attachments before clearing
   const imgs = [...pendingImages];

@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data:" />
+  <title>Build a Meteor extension</title>
+  <style>
+    @font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:200 800;font-display:swap;src:url("../fonts/plus-jakarta-sans-latin-wght-normal.woff2") format("woff2-variations")}
+    @font-face{font-family:"Geist Mono";font-style:normal;font-weight:100 900;font-display:swap;src:url("../fonts/geist-mono-latin-wght-normal.woff2") format("woff2-variations")}
+    :root{
+      --y-blue:#0064E0;--y-blue-hover:#0457CB;--y-blue-focus:#0143B5;
+      --y-ink:#1C2B33;--y-muted:#5D6C7B;
+      --y-canvas:#FFFFFF;--y-soft:#F1F4F7;--y-soft-media:#F6F6F6;
+      --y-hairline:rgba(10,19,23,.12);
+      --y-font:"Plus Jakarta Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+      --y-mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      --y-radius:24px;--y-radius-sm:12px;--y-radius-pill:100px;
+      --y-gutter:32px;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth;-webkit-font-smoothing:antialiased}
+    body{font-family:var(--y-font);font-size:16px;line-height:24px;letter-spacing:-.16px;color:var(--y-ink);background:var(--y-canvas)}
+    a{color:var(--y-blue);text-decoration:none}a:hover{text-decoration:underline}
+    :focus-visible{outline:2px solid var(--y-blue-focus);outline-offset:3px}
+    header.top{position:sticky;top:0;z-index:5;height:64px;display:flex;align-items:center;gap:24px;padding:0 var(--y-gutter);background:rgba(255,255,255,.8);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+    header.top strong{font-size:16px;font-weight:700}
+    header.top nav{display:flex;gap:4px;margin-left:auto}
+    header.top nav a{height:32px;padding:0 12px;border-radius:24px;display:inline-flex;align-items:center;font-size:14px;color:var(--y-ink)}
+    header.top nav a:hover{background:rgba(0,0,0,.05);text-decoration:none}
+    .hero{padding:96px var(--y-gutter) 56px;text-align:center}
+    .hero h1{font-size:64px;line-height:74px;font-weight:500;letter-spacing:normal;max-width:760px;margin:0 auto;text-wrap:balance}
+    .hero p{font-size:18px;line-height:26px;color:var(--y-muted);max-width:600px;margin:24px auto 0;letter-spacing:normal}
+    .hero .cta{display:flex;gap:12px;justify-content:center;margin-top:32px}
+    .btn{height:52px;padding:0 30px;border-radius:var(--y-radius-pill);display:inline-flex;align-items:center;font-size:14px;font-weight:700;border:2px solid transparent}
+    .btn.primary{background:var(--y-blue);color:#fff}.btn.primary:hover{background:var(--y-blue-hover);text-decoration:none}
+    .btn.outline{border-color:var(--y-hairline);color:var(--y-blue)}.btn.outline:hover{text-decoration:none;background:rgba(0,100,224,.06)}
+    main{padding:0 var(--y-gutter) 120px;max-width:1120px;margin:0 auto}
+    .layout{display:grid;grid-template-columns:220px 1fr;gap:56px}
+    aside.toc{position:sticky;top:88px;align-self:start;display:flex;flex-direction:column;gap:2px}
+    aside.toc a{height:36px;display:flex;align-items:center;padding:0 12px;border-radius:24px;font-size:14px;color:var(--y-muted)}
+    aside.toc a:hover{background:var(--y-soft);color:var(--y-ink);text-decoration:none}
+    section{padding:56px 0;border-top:1px solid var(--y-hairline)}
+    section:first-of-type{border-top:none;padding-top:8px}
+    h2{font-size:36px;line-height:46px;font-weight:500;letter-spacing:normal;margin-bottom:16px;text-wrap:balance}
+    h3{font-size:24px;line-height:30px;font-weight:500;margin:32px 0 8px;letter-spacing:normal}
+    p{color:var(--y-muted);margin:12px 0;max-width:720px}
+    p strong,li strong{color:var(--y-ink)}
+    ul,ol{margin:12px 0 12px 24px;color:var(--y-muted);max-width:720px}li{margin:6px 0}
+    code{font-family:var(--y-mono);font-size:13px;letter-spacing:0;background:var(--y-soft);border-radius:8px;padding:2px 6px;color:var(--y-ink)}
+    pre{background:var(--y-soft-media);border:1px solid var(--y-hairline);border-radius:var(--y-radius-sm);padding:16px 20px;margin:16px 0;overflow:auto}
+    pre code{background:none;padding:0;font-size:13px;line-height:20px;white-space:pre}
+    .file{font-family:var(--y-mono);font-size:12px;color:var(--y-muted);margin:16px 0 -8px}
+    table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;line-height:20px}
+    th,td{text-align:left;vertical-align:top;padding:12px 16px;border-bottom:1px solid var(--y-hairline)}
+    th{font-weight:700;color:var(--y-ink);background:var(--y-soft)}
+    th:first-child{border-radius:12px 0 0 12px}th:last-child{border-radius:0 12px 12px 0}
+    td{color:var(--y-muted)}td:first-child{white-space:nowrap}
+    .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0}
+    .card{background:var(--y-soft);border-radius:var(--y-radius);padding:24px}
+    .card h3{font-size:18px;line-height:26px;margin:0 0 8px}
+    .card p{margin:0;font-size:14px;line-height:20px}
+    .note{background:var(--y-soft);border-radius:var(--y-radius);padding:20px 24px;margin:24px 0;color:var(--y-muted);max-width:720px}
+    .note strong{display:block;color:var(--y-ink);margin-bottom:4px}
+    footer{padding:32px var(--y-gutter);text-align:center;font-size:12px;line-height:16px;color:var(--y-muted);border-top:1px solid var(--y-hairline)}
+    @media (max-width:900px){
+      .layout{grid-template-columns:1fr}aside.toc{display:none}
+      .hero{padding:72px 16px 40px}.hero h1{font-size:40px;line-height:46px}
+      main{padding:0 16px 80px}h2{font-size:28px;line-height:34px}
+      .cards{grid-template-columns:1fr}
+      header.top{padding:0 16px}
+    }
+    @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  </style>
+</head>
+<body>
+  <header class="top">
+    <strong>Meteor</strong>
+    <nav aria-label="Docs">
+      <a href="#quickstart">Quick start</a>
+      <a href="#reference">Manifest</a>
+      <a href="#publish">Publish</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <h1>Build a Meteor extension</h1>
+    <p>An extension is one JSON file. Add slash commands, shared instructions and MCP tools, then share it in the store.</p>
+    <div class="cta">
+      <a class="btn primary" href="#quickstart">Start in 5 minutes</a>
+      <a class="btn outline" href="#reference">Manifest reference</a>
+    </div>
+  </div>
+
+  <main>
+    <div class="layout">
+      <aside class="toc" aria-label="On this page">
+        <a href="#how">How extensions work</a>
+        <a href="#quickstart">Quick start</a>
+        <a href="#reference">Manifest reference</a>
+        <a href="#commands">Slash commands</a>
+        <a href="#instructions">Instructions</a>
+        <a href="#mcp">MCP servers</a>
+        <a href="#test">Test locally</a>
+        <a href="#publish">Publish to the store</a>
+        <a href="#safety">Safety</a>
+        <a href="#trouble">Troubleshooting</a>
+      </aside>
+
+      <div>
+        <section id="how">
+          <h2>How extensions work</h2>
+          <p>Meteor extensions are <strong>declarative</strong>. They describe what to add, and Meteor does the rest. No extension code runs inside the app, so a manifest can't crash Meteor or read your files on its own.</p>
+          <div class="cards">
+            <div class="card"><h3>Slash commands</h3><p>Reusable prompts such as <code>/review</code> or <code>/commit</code>, typed in the chat box.</p></div>
+            <div class="card"><h3>Instructions</h3><p>A short style or behaviour note added to every chat, like "keep answers short".</p></div>
+            <div class="card"><h3>MCP servers</h3><p>Give Meteor new tools, such as memory or a database, through the open Model Context Protocol.</p></div>
+          </div>
+          <p>Anything that needs to run code is an MCP server. You write the server (in any language), and the extension tells Meteor how to start it.</p>
+        </section>
+
+        <section id="quickstart">
+          <h2>Quick start</h2>
+          <p>Make a folder and add a file called <code>meteor-extension.json</code>:</p>
+          <div class="file">meteor-extension.json</div>
+<pre><code>{
+  "id": "hello-extension",
+  "name": "Hello extension",
+  "version": "0.1.0",
+  "description": "A minimal example: one slash command and one instruction.",
+  "author": "You",
+  "commands": [
+    {
+      "name": "hello",
+      "description": "Greet the user in a friendly way",
+      "prompt": "Say hello and then help with this: {{input}}"
+    }
+  ],
+  "instructions": "When the user says hello, answer in one friendly sentence."
+}</code></pre>
+          <ol>
+            <li>In Meteor, open <strong>Extensions</strong> in the sidebar.</li>
+            <li>Choose <strong>Install from file</strong> and pick your <code>meteor-extension.json</code>.</li>
+            <li>Read the confirmation, then press <strong>Install</strong>.</li>
+            <li>In any chat, type <code>/hello fix my bug</code>. Meteor expands it into your prompt and sends it.</li>
+          </ol>
+          <p>The same file lives in the Meteor repository under <code>examples/hello-extension/</code>.</p>
+        </section>
+
+        <section id="reference">
+          <h2>Manifest reference</h2>
+          <p>An extension must include at least one of <code>commands</code>, <code>instructions</code> or <code>mcpServers</code>. Meteor checks every file when you install it and tells you what to fix.</p>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code></td><td>string, required</td><td>Unique name. 2–39 characters: lowercase letters, numbers and dashes. Installing the same <code>id</code> again replaces the old version.</td></tr>
+              <tr><td><code>name</code></td><td>string, required</td><td>Shown in the store. Up to 60 characters.</td></tr>
+              <tr><td><code>version</code></td><td>string, required</td><td>Version like <code>1.0.0</code>.</td></tr>
+              <tr><td><code>description</code></td><td>string, required</td><td>One or two sentences. Up to 300 characters.</td></tr>
+              <tr><td><code>author</code></td><td>string</td><td>Your name or team. Up to 80 characters.</td></tr>
+              <tr><td><code>homepage</code></td><td>string</td><td>An <code>https://</code> link to your source or docs.</td></tr>
+              <tr><td><code>commands</code></td><td>array</td><td>Up to 20 slash commands. See below.</td></tr>
+              <tr><td><code>instructions</code></td><td>string</td><td>Up to 4,000 characters, added to every chat.</td></tr>
+              <tr><td><code>mcpServers</code></td><td>object</td><td>Up to 10 MCP servers, in the same format as Meteor's Plugins settings.</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="commands">
+          <h2>Slash commands</h2>
+          <p>Each command is a name, a description and a prompt template.</p>
+<pre><code>"commands": [
+  {
+    "name": "review",
+    "description": "Review code for bugs, security and clarity",
+    "prompt": "Review the following code and list problems by severity.\n\n{{input}}"
+  }
+]</code></pre>
+          <table>
+            <thead><tr><th>Field</th><th>Rules</th></tr></thead>
+            <tbody>
+              <tr><td><code>name</code></td><td>Lowercase letters, numbers and dashes, starting with a letter. The user types it as <code>/name</code>. These names are reserved: <code>clear</code>, <code>new</code>, <code>help</code>, <code>model</code>, <code>reasoning</code>.</td></tr>
+              <tr><td><code>description</code></td><td>Up to 120 characters. Shown in <code>/help</code>.</td></tr>
+              <tr><td><code>prompt</code></td><td>Up to 4,000 characters. <code>{{input}}</code> is replaced by whatever the user typed after the command. Without <code>{{input}}</code>, their text is added at the end.</td></tr>
+            </tbody>
+          </table>
+          <p>The expanded prompt is what appears in the chat, so users can always see exactly what was sent. Attach files with <code>@</code> before running a command and Meteor includes them as usual.</p>
+        </section>
+
+        <section id="instructions">
+          <h2>Instructions</h2>
+          <p>Instructions are added to Meteor's system prompt under an "Extension instructions" heading. Use them for stable preferences, not for tasks.</p>
+          <ul>
+            <li>Keep them short and specific. Several installed extensions share the same prompt.</li>
+            <li>Write what Meteor <strong>should do</strong>, such as "answer with code first", instead of long lists of rules.</li>
+            <li>Avoid telling Meteor to ignore its other instructions. Conflicting instructions give unpredictable results.</li>
+          </ul>
+        </section>
+
+        <section id="mcp">
+          <h2>MCP servers</h2>
+          <p>Use <code>mcpServers</code> to add tools. Each key is a server name, and the value is the same config you would use in Meteor's Plugins settings.</p>
+<pre><code>"mcpServers": {
+  "server": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-memory"]
+  }
+}</code></pre>
+          <p>Remote servers use a URL instead of a command:</p>
+<pre><code>"mcpServers": {
+  "docs": { "type": "http", "url": "https://example.com/mcp" }
+}</code></pre>
+          <ul>
+            <li>On install, each server is added to Plugins as <code>ext-&lt;id&gt;-&lt;name&gt;</code>. Removing the extension removes them again.</li>
+            <li>Meteor only offers MCP tools to the model when a message mentions <code>@</code>, "mcp" or a server name, so tell users what to mention in your description.</li>
+            <li>Never put secrets such as API keys in a published manifest. Ask users to add keys in Settings → Plugins after installing.</li>
+          </ul>
+        </section>
+
+        <section id="test">
+          <h2>Test locally</h2>
+          <ol>
+            <li>Install your file with <strong>Extensions → Install from file</strong>. You can reinstall any time to update it.</li>
+            <li>Type <code>/help</code> in a chat. Your commands should be listed.</li>
+            <li>Run each command once. Check the expanded prompt in the chat gives the answer you want.</li>
+            <li>For MCP servers, open Settings → Plugins and press test to confirm the server starts.</li>
+            <li><strong>Extensions → Open folder</strong> shows where installed extensions are stored (<code>~/.config/meteor/extensions/</code>).</li>
+          </ol>
+        </section>
+
+        <section id="publish">
+          <h2>Publish to the store</h2>
+          <p>The store reads a single file, <code>registry/extensions.json</code>, from the Meteor repository on GitHub. To list your extension:</p>
+          <ol>
+            <li>Fork <a href="https://github.com/YlsooAI/MeteorIDE">YlsooAI/MeteorIDE</a>.</li>
+            <li>Add your whole manifest as a new object in the <code>extensions</code> array of <code>registry/extensions.json</code>.</li>
+            <li>Open a pull request. Describe what the extension does and, for MCP servers, where its source lives.</li>
+          </ol>
+<pre><code>{
+  "extensions": [
+    { "id": "code-review", "name": "Code review", "version": "1.0.0", "...": "..." },
+    { "id": "your-extension", "name": "Your extension", "version": "1.0.0", "...": "..." }
+  ]
+}</code></pre>
+          <p>Entries that fail validation are skipped, so check that your manifest installs from a file first. To release an update, raise <code>version</code> and open another pull request.</p>
+          <div class="note"><strong>What reviewers look for</strong>Clear descriptions, no secrets, MCP servers from sources people can read, and commands that do what their description says.</div>
+        </section>
+
+        <section id="safety">
+          <h2>Safety</h2>
+          <ul>
+            <li>Meteor shows what an extension will do before installing it, including the exact command of every MCP server.</li>
+            <li>MCP servers run on the user's computer with their permissions. Only install extensions you trust.</li>
+            <li>Meteor validates the manifest strictly. Unknown shapes, oversized text and reserved command names are rejected.</li>
+            <li>The manifest itself can't run code in the Meteor window. Only the MCP servers it lists run code.</li>
+          </ul>
+        </section>
+
+        <section id="trouble">
+          <h2>Troubleshooting</h2>
+          <table>
+            <thead><tr><th>Problem</th><th>Fix</th></tr></thead>
+            <tbody>
+              <tr><td>"Not valid JSON"</td><td>Check for trailing commas and that all text uses straight double quotes. Paste the file into a JSON validator.</td></tr>
+              <tr><td>"id must be 2-39 characters"</td><td>Use only lowercase letters, numbers and dashes, such as <code>my-tool</code>.</td></tr>
+              <tr><td>"is reserved by Meteor"</td><td>Rename the command. <code>/clear</code>, <code>/new</code>, <code>/help</code>, <code>/model</code> and <code>/reasoning</code> are built in.</td></tr>
+              <tr><td>Command does nothing</td><td>Commands are matched at the very start of the message. Put the command first and check <code>/help</code>.</td></tr>
+              <tr><td>MCP tools never run</td><td>Mention <code>@</code>, "mcp" or the server name in your message, then check the server under Settings → Plugins.</td></tr>
+              <tr><td>Store says "Offline"</td><td>Meteor falls back to the built-in list. Installing from a file always works offline.</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <footer>Meteor extension docs · <a href="https://github.com/YlsooAI/MeteorIDE">github.com/YlsooAI/MeteorIDE</a></footer>
+</body>
+</html>

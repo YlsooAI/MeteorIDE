@@ -9,6 +9,7 @@ export const EMBEDDED_TOKENROUTER_KEY = "sk-fUJ01WsVjVDgfzj15Pm3aIlxAx7scu47QH2d
 export const EMBEDDED_ORCAROUTER_KEY = "sk-orca-Qdv85X8nGSpXGRCvHbQi6LI0aSInXwLa9xmsBXnzDxY";
 export const EMBEDDED_BROWSERBASE_API_KEY = "bb_live_MXTt6FP2BJ5RKgtOr4gezAvQL2g";
 export const EMBEDDED_SUPABASE_URL = "https://ikjugnimawkoatkbvpgk.supabase.co";
+export const EMBEDDED_OPENROUTER_KEY = "";
 export const EMBEDDED_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlranVnbmltYXdrb2F0a2J2cGdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNzI3OTAsImV4cCI6MjA5NTY0ODc5MH0.xr9B_khj2zKIEoUsTisL66SGgn8Yo2K0YH5YDw0QmQw";
 
 export interface McpServerConfig {
@@ -30,7 +31,7 @@ export interface MeteorConfig {
   mercuryKey?: string;
   tokenrouterKey?: string;
   orcarouterKey?: string;
-  gatewayKey?: string;
+  openrouterKey?: string;
   browserbaseApiKey?: string;
   defaultModel?: string;
   mcpServers?: McpServers;
@@ -114,16 +115,17 @@ export function resolveOrcaRouterKey(cliKey?: string): string | undefined {
   );
 }
 
-export function resolveGatewayKey(cliKey?: string): string | undefined {
+export function resolveOpenRouterKey(cliKey?: string): string | undefined {
   return (
     cliKey ??
-    process.env.AI_GATEWAY_API_KEY ??
-    loadConfig().gatewayKey
+    process.env.OPENROUTER_API_KEY ??
+    loadConfig().openrouterKey ??
+    EMBEDDED_OPENROUTER_KEY
   );
 }
 
 export function resolveModelKey(provider: string | undefined, cliKey?: string): string | undefined {
-  if (provider === "vercel") return resolveGatewayKey(cliKey);
+  if (provider === "openrouter") return resolveOpenRouterKey(cliKey);
   if (provider === "mercury") return resolveMercuryKey(cliKey);
   if (provider === "tokenrouter") return resolveTokenRouterKey(cliKey);
   if (provider === "orcarouter") return resolveOrcaRouterKey(cliKey);
@@ -132,8 +134,8 @@ export function resolveModelKey(provider: string | undefined, cliKey?: string): 
 
 export function modelKeyHint(provider: string | undefined): string {
   switch (provider) {
-    case "vercel":
-      return "Set AI_GATEWAY_API_KEY, or run: meteor auth set-gateway <key>";
+    case "openrouter":
+      return "Set OPENROUTER_API_KEY, or run: meteor auth set-openrouter <key>";
     case "mercury":
       return "Set MERCURY_API_KEY, or add mercuryKey to ~/.config/meteor/config.json";
     case "tokenrouter":
@@ -159,8 +161,8 @@ export function saveBrowserbaseKey(key: string): void {
   saveConfig({ browserbaseApiKey: key });
 }
 
-export function saveGatewayKey(key: string): void {
-  saveConfig({ gatewayKey: key });
+export function saveOpenRouterKey(key: string): void {
+  saveConfig({ openrouterKey: key });
 }
 
 export function saveTokenRouterKey(key: string): void {
@@ -173,9 +175,10 @@ export function saveOrcaRouterKey(key: string): void {
 
 export function isUsingFreeTier(cliKey?: string, provider?: string): boolean {
   if (cliKey) return false;
-  if (provider === "vercel") {
-    // Gateway usage is billed to the key owner; there is no shared free tier.
-    return false;
+  if (provider === "openrouter") {
+    // Without their own key, users share the embedded key and the Meteor free quota.
+    if (process.env.OPENROUTER_API_KEY) return false;
+    return !loadConfig().openrouterKey;
   }
   if (provider === "mercury") {
     if (process.env.MERCURY_API_KEY) return false;
