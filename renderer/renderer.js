@@ -2095,63 +2095,92 @@ function buildExecBlock(exec) {
   return box;
 }
 
-/* ---------------- MCP tool calls (glassy) ---------------- */
-function buildMcpToolBlock(call) {
-  const box = document.createElement("div");
-  box.className = "msg-mcp-tool";
-  box.dataset.toolId = call.id;
-  const head = document.createElement("div");
-  head.className = "msg-mcp-head";
-  const icon = document.createElement("span");
-  const isWeb = call.server === "web" || call.tool === "fetch_url" || call.tool === "search_internet";
-  if (isWeb) {
-    if (call.tool === "search_internet" || (call.name && call.name.endsWith("search_internet"))) {
-      icon.textContent = "🔍";
-      icon.style.color = "var(--purple, #a855f7)";
-    } else {
-      icon.textContent = "🌐";
-      icon.style.color = "var(--blue, #3b82f6)";
-    }
-    icon.style.display = "inline-flex";
-    icon.style.fontSize = "13px";
-  } else {
-    icon.innerHTML = ICONS.sparkle;
-    icon.style.color = "var(--blue)";
-    icon.style.display = "inline-flex";
+/* ---------------- Tool activity (web search, page reads, MCP tools) ---------------- */
+const TOOL_ICONS = {
+  search: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>`,
+  globe: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/></svg>`,
+  tool: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg>`,
+  check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`,
+  alert: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg>`,
+  chev: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>`,
+};
+
+function describeToolCall(call, args) {
+  const tool = call.tool || "";
+  if (tool === "search_internet" || (call.name || "").endsWith("search_internet")) {
+    const q = String(args.query || args.q || "").trim();
+    return { icon: "search", running: "Searching the web", done: "Searched the web", failed: "Web search failed", detail: q ? `“${q}”` : "" };
   }
-  const name = document.createElement("span");
-  name.className = "mcp-tool-name";
-  if (isWeb) {
-    name.textContent = call.tool === "search_internet" ? "Browserbase · search" : "Web · fetch_url";
-  } else {
-    name.textContent = `${call.server} · ${call.tool}`;
+  if (tool === "fetch_url" || (call.name || "").endsWith("fetch_url")) {
+    let host = "", path = "";
+    try { const u = new URL(String(args.url || "")); host = u.hostname.replace(/^www\./, ""); path = (u.pathname + u.search).replace(/\/$/, ""); } catch { host = String(args.url || "page"); }
+    return { icon: "globe", running: `Reading ${host}`, done: `Read ${host}`, failed: `Couldn't read ${host}`, detail: path, href: String(args.url || "") };
   }
-  name.title = call.name;
-  const badge = document.createElement("span");
-  badge.className = "mcp-tool-badge";
-  badge.textContent = "calling…";
-  const argsPre = document.createElement("pre");
-  argsPre.className = "mcp-tool-args";
-  try { argsPre.textContent = JSON.stringify(call.parsedArgs ?? JSON.parse(call.arguments || "{}"), null, 2); } catch { argsPre.textContent = call.arguments || "{}"; }
-  head.append(icon, name, badge);
-  const out = document.createElement("pre");
-  out.className = "mcp-tool-out hidden";
-  out.textContent = "";
-  box.append(head, argsPre, out);
-  box._badge = badge;
-  box._out = out;
-  box._argsPre = argsPre;
-  return box;
+  const label = String(tool).replace(/[_-]+/g, " ");
+  return { icon: "tool", running: `Running ${label}`, done: `Ran ${label}`, failed: `${label} failed`, detail: call.server && call.server !== "mcp" ? call.server : "" };
 }
-function updateMcpToolResult(box, result, isError) {
-  if (!box) return;
-  const badge = box._badge;
-  const out = box._out;
-  if (badge) { badge.textContent = isError ? "error" : "done ✓"; badge.className = isError ? "mcp-tool-badge error" : "mcp-tool-badge ok"; }
-  if (out) {
-    out.textContent = typeof result === "string" ? result.slice(0, 8000) : JSON.stringify(result, null, 2).slice(0, 8000);
-    out.classList.remove("hidden");
-    if (isError) out.classList.add("error");
+
+function buildMcpToolBlock(call) {
+  let args = {};
+  try { args = call.parsedArgs ?? JSON.parse(call.arguments || "{}"); } catch {}
+  const d = describeToolCall(call, args || {});
+  const row = document.createElement("div");
+  row.className = "tool-row";
+  row.dataset.state = "running";
+  row.dataset.toolId = call.id;
+
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "tool-row-head";
+  head.setAttribute("aria-expanded", "false");
+  head.title = d.href || call.name || "";
+  head.innerHTML =
+    `<span class="tool-ico" aria-hidden="true">${TOOL_ICONS[d.icon]}</span>` +
+    `<span class="tool-title"></span>` +
+    `<span class="tool-detail"></span>` +
+    `<span class="tool-status" aria-hidden="true"><span class="tool-spinner"></span></span>` +
+    `<span class="tool-chev" aria-hidden="true">${TOOL_ICONS.chev}</span>`;
+  head.querySelector(".tool-title").textContent = d.running;
+  head.querySelector(".tool-detail").textContent = d.detail;
+
+  const body = document.createElement("div");
+  body.className = "tool-body hidden";
+  const argLine = document.createElement("div");
+  argLine.className = "tool-args";
+  if (d.href) {
+    argLine.textContent = d.href;
+  } else {
+    const entries = Object.entries(args || {});
+    argLine.textContent = entries.length ? entries.map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("\n") : "";
+  }
+  const out = document.createElement("pre");
+  out.className = "tool-out";
+  out.textContent = "Waiting for result…";
+  body.append(argLine, out);
+
+  head.addEventListener("click", () => {
+    const open = body.classList.toggle("hidden") === false;
+    head.setAttribute("aria-expanded", String(open));
+    row.classList.toggle("open", open);
+  });
+
+  row.append(head, body);
+  row._desc = d;
+  row._out = out;
+  return row;
+}
+
+function updateMcpToolResult(row, result, isError) {
+  if (!row) return;
+  const d = row._desc || {};
+  row.dataset.state = isError ? "error" : "done";
+  const title = row.querySelector(".tool-title");
+  if (title) title.textContent = isError ? d.failed : d.done;
+  const status = row.querySelector(".tool-status");
+  if (status) status.innerHTML = isError ? TOOL_ICONS.alert : TOOL_ICONS.check;
+  if (row._out) {
+    const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+    row._out.textContent = (text || "No output").slice(0, 8000).trim() || "No output";
   }
 }
 
@@ -2556,7 +2585,7 @@ async function sendCurrent() {
         if (info && info.count) {
           const pill = document.createElement("div");
           pill.className = "tool-info";
-          pill.innerHTML = `${ICONS.sparkle} ${info.count} plugin tools available`;
+          pill.textContent = `${info.count} plugin tool${info.count === 1 ? "" : "s"} available`;
           pill.title = (info.tools || []).map((t) => `${t.server}.${t.name}`).join(", ");
           toolsDiv.append(pill);
         }
