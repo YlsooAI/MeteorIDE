@@ -12,6 +12,7 @@ import { resolveApiKey, isUsingFreeTier, resolveModelKey, modelKeyHint } from ".
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, resetQuota, QuotaExceededError, formatTimeRemaining, FREE_TIER_TOKEN_LIMIT, type QuotaStatus } from "../src/quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "../src/web.js";
 import { scanWorkspace, writeFileInWorkspace } from "./workspace.js";
+import { listChats, loadChat, saveChat, renameChat, deleteChat, deleteProjectChats } from "./chats.js";
 import { fetchRegistry, installExtension, listInstalled, uninstallExtension, validateManifest, describeManifest, parseManifestFile, extensionsDir, type ExtensionManifest } from "./extensions.js";
 import { authSignUp, authSignIn, authSignOut, authGetSession, authGetUser, isSupabaseConfigured, getProfileAvatar, getProfile, listProjects, createProject, getProject, updateProject, deleteProject, saveProjectMessages, loadProjectMessages, quotaGetServer, quotaRecordServer, quotaResetServer, type ServerQuotaState } from "./supabase.js";
 
@@ -128,6 +129,7 @@ ipcMain.handle("projects:update", async (_e, payload: { id: string; updates: Par
 ipcMain.handle("projects:delete", async (_e, payload: { id: string }) => {
   if (!payload?.id) throw new Error("id required");
   await deleteProject(payload.id);
+  try { deleteProjectChats(payload.id); } catch {}
   return { ok: true };
 });
 ipcMain.handle("projects:saveMessages", async (_e, payload: { projectId: string; messages: Array<{ role: string; content: unknown }> }) => {
@@ -140,53 +142,75 @@ ipcMain.handle("projects:loadMessages", async (_e, payload: { projectId: string 
   return await loadProjectMessages(payload.projectId);
 });
 
-ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string; firstMessage?: string; firstResponse?: string }) => {
-  if (!payload?.projectId) throw new Error("projectId required");
-  const proj = await getProject(payload.projectId);
-  if (!proj) throw new Error("Project not found");
-  const user = await authGetUser();
-  if (!user || proj.user_id !== user.id) throw new Error("Not authorized");
-  // already has a custom title that isn't just folder name? skip if looks like AI title already
-  const isGeneric = proj.name === proj.folder_path.split("/").pop() || proj.name === "Untitled" || !proj.name;
-  // Build prompt for Sunlight 2 Pro
-  const firstMsg = (payload.firstMessage || proj.last_message || "").slice(0, 800);
-  const firstResp = (payload.firstResponse || "").slice(0, 800);
-  const prompt = `Generate a short, concise chat title (3-6 words, no quotes, no period, Title Case, PLAIN TEXT ONLY — no markdown, no # symbols, no bold) that summarizes this conversation. Return ONLY the title, nothing else.\n\nUser: ${firstMsg}\n${firstResp ? `Assistant: ${firstResp}` : ""}`;
+async function generateChatTitle(firstMessage: string, firstResponse: string): Promise<string> {
+  const prompt = `Generate a short, concise chat title (3-6 words, no quotes, no period, Title Case, PLAIN TEXT ONLY — no markdown, no # symbols, no bold) that summarizes this conversation. Return ONLY the title, nothing else.\n\nUser: ${firstMessage.slice(0, 800)}\n${firstResponse ? `Assistant: ${firstResponse.slice(0, 800)}` : ""}`;
   const proModel = resolveModel("sunlight-2-pro");
   const apiKey = resolveModelKey(proModel.provider);
   if (!apiKey) throw new Error(`No API key for title generation. ${modelKeyHint(proModel.provider)}`);
   const isFree = isUsingFreeTier(undefined, proModel.provider);
   await checkQuotaOrThrowServer(isFree);
+  const result = await complete({
+    apiKey,
+    apiModel: proModel.apiModel,
+    protocol: proModel.protocol,
+    baseUrl: proModel.baseUrl,
+    provider: proModel.provider,
+    messages: [
+      { role: "system", content: "You are a title generator. Respond with only the title, 3-6 words, no quotes." } as Message,
+      { role: "user", content: prompt } as Message,
+    ],
+    stream: false,
+    reasoningEffort: "low",
+  });
+  if (result.usage) await recordTokenUsageServer(result.usage.totalTokens, isFree);
+  let title = (result.text || "").trim();
+  // sanitize: strip markdown (## headings, **bold**, *italic*), quotes, newlines, trailing period, limit length
+  title = title.replace(/^#{1,6}\s+/, "").replace(/^\*{1,3}\s*|\s*\*{1,3}$/g, "").replace(/^_{1,3}\s*|\s*_{1,3}$/g, "");
+  title = title.replace(/^["'`\s]+|["'`\s]+$/g, "").replace(/\n.*$/s, "").replace(/[.]+$/g, "").trim();
+  title = title.split(/\s+/).slice(0, 6).join(" ");
+  if (title.length > 60) title = title.slice(0, 60).trim();
+  if (!title || title.length < 3) throw new Error("Empty title");
+  return title.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
+
+async function assertOwnProject(projectId: string) {
+  const proj = await getProject(projectId);
+  if (!proj) throw new Error("Project not found");
+  const user = await authGetUser();
+  if (!user || proj.user_id !== user.id) throw new Error("Not authorized");
+  return proj;
+}
+
+ipcMain.handle("project:generateTitle", async (_e, payload: { projectId: string; firstMessage?: string; firstResponse?: string }) => {
+  if (!payload?.projectId) throw new Error("projectId required");
+  const proj = await assertOwnProject(payload.projectId);
   try {
-    const result = await complete({
-      apiKey,
-      apiModel: proModel.apiModel,
-      protocol: proModel.protocol,
-      baseUrl: proModel.baseUrl,
-      provider: proModel.provider,
-      messages: [
-        { role: "system", content: "You are a title generator. Respond with only the title, 3-6 words, no quotes." } as Message,
-        { role: "user", content: prompt } as Message,
-      ],
-      stream: false,
-      reasoningEffort: "low",
-    });
-    if (result.usage) await recordTokenUsageServer(result.usage.totalTokens, isFree);
-    let title = (result.text || "").trim();
-    // sanitize: strip markdown (## headings, **bold**, *italic*), quotes, newlines, trailing period, limit length
-    title = title.replace(/^#{1,6}\s+/, "").replace(/^\*{1,3}\s*|\s*\*{1,3}$/g, "").replace(/^_{1,3}\s*|\s*_{1,3}$/g, "");
-    title = title.replace(/^["'`\s]+|["'`\s]+$/g, "").replace(/\n.*$/s, "").replace(/[.]+$/g, "").trim();
-    title = title.split(/\s+/).slice(0, 6).join(" ");
-    if (title.length > 60) title = title.slice(0, 60).trim();
-    if (!title || title.length < 3) throw new Error("Empty title");
-    // Title Case normalization
-    title = title.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+    const title = await generateChatTitle(payload.firstMessage || proj.last_message || "", payload.firstResponse || "");
     const updated = await updateProject(payload.projectId, { name: title });
     return { title, project: updated };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Title generation failed: ${msg}`);
+    throw new Error(`Title generation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+});
+
+// ── Chats: several saved conversations per project (stored locally) ──
+ipcMain.handle("chats:list", async (_e, payload: { projectId: string; legacyTitle?: string }) => {
+  return listChats(payload.projectId, payload.legacyTitle || "");
+});
+ipcMain.handle("chats:load", async (_e, payload: { projectId: string; chatId: string }) => {
+  return loadChat(payload.projectId, payload.chatId);
+});
+ipcMain.handle("chats:save", async (_e, payload: { projectId: string; chatId: string | null; messages: Array<{ role: string; content: unknown }> }) => {
+  return saveChat(payload.projectId, payload.chatId, payload.messages || []);
+});
+ipcMain.handle("chats:delete", async (_e, payload: { projectId: string; chatId: string }) => {
+  deleteChat(payload.projectId, payload.chatId);
+  return { ok: true };
+});
+ipcMain.handle("chats:generateTitle", async (_e, payload: { projectId: string; chatId: string; firstMessage?: string; firstResponse?: string }) => {
+  await assertOwnProject(payload.projectId);
+  const title = await generateChatTitle(payload.firstMessage || "", payload.firstResponse || "");
+  return renameChat(payload.projectId, payload.chatId, title);
 });
 
 let mcpToolsCache: { tools: Array<{ server: string; name: string; description?: string; inputSchema?: unknown }>; at: number; cwd: string } | null = null;

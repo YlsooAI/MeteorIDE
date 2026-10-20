@@ -39,6 +39,15 @@ const collapsedDirs = new Set();
 // Projects (meteor_projects)
 let currentProjectId = localStorage.getItem("meteor:currentProjectId") || null;
 let projectsCache = [];
+// Several saved chats per project (stored locally by the main process)
+let currentChatId = localStorage.getItem("meteor:currentChatId") || null;
+const chatsCache = new Map(); // projectId -> ChatMeta[]
+function setCurrentChat(projectId, chatId){
+  currentProjectId = projectId || null;
+  currentChatId = chatId || null;
+  if (currentProjectId) localStorage.setItem("meteor:currentProjectId", currentProjectId); else localStorage.removeItem("meteor:currentProjectId");
+  if (currentChatId) localStorage.setItem("meteor:currentChatId", currentChatId); else localStorage.removeItem("meteor:currentChatId");
+}
 let expandedProjects = new Set(JSON.parse(localStorage.getItem("meteor:expandedProjects") || "[]"));
 function persistExpanded(){ try{ localStorage.setItem("meteor:expandedProjects", JSON.stringify([...expandedProjects])); }catch{} }
 
@@ -55,17 +64,40 @@ let autoCreateEnabled = localStorage.getItem("meteor:autoCreate") !== "false";
 let buildMode = localStorage.getItem("meteor:buildMode") || "build";
 let terminalLog = [];
 
-// ── Image attachments ───────────────────────────────────────────────
-let pendingImages = []; // {id, name, dataUrl, size}
+// ── Uploads: images, videos and PDFs go to the model as media; text/code files as attachments ──
+let pendingImages = []; // {id, kind: "image"|"video"|"pdf", name, mime, dataUrl, size}
 let imageSeq = 0;
-const MAX_IMAGES = 8;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const MAX_TOTAL_BYTES = 24 * 1024 * 1024;
+const MAX_IMAGES = 8; // media items per message
+const MEDIA_LIMITS = { image: 10 * 1024 * 1024, video: 20 * 1024 * 1024, pdf: 15 * 1024 * 1024 };
+const MAX_TOTAL_BYTES = 40 * 1024 * 1024;
+const MAX_TEXT_UPLOAD_BYTES = 2 * 1024 * 1024;
+const TEXT_EXTENSIONS = new Set(["txt","md","markdown","json","jsonc","yml","yaml","toml","ini","cfg","conf","env","csv","tsv","xml","html","htm","css","scss","sass","less","js","mjs","cjs","jsx","ts","tsx","py","rb","go","rs","java","kt","kts","swift","c","h","cc","cpp","hpp","cs","php","sh","bash","zsh","fish","ps1","sql","graphql","gql","vue","svelte","astro","lua","r","dart","scala","ex","exs","erl","hs","clj","pl","proto","dockerfile","makefile","gradle","log","diff","patch","tex","rst","adoc","lock"]);
+
+let uploadNoticeTimer = null;
+// Upload problems show under the composer (the chat log is hidden on the home screen).
+function uploadNotice(msg){
+  const el = document.getElementById("upload-note");
+  if (!el) { addMsg("system", msg); return; }
+  el.textContent = String(msg).replace(/^✗\s*/, "");
+  el.classList.remove("hidden");
+  clearTimeout(uploadNoticeTimer);
+  uploadNoticeTimer = setTimeout(() => el.classList.add("hidden"), 7000);
+}
 
 function formatBytes(n){
   if (n < 1024) return n+" B";
   if (n < 1024*1024) return (n/1024).toFixed(1)+" KB";
   return (n/1024/1024).toFixed(2)+" MB";
+}
+
+function uploadKind(f){
+  const type = (f.type || "").toLowerCase();
+  if (type.startsWith("image/")) return "image";
+  if (type.startsWith("video/")) return "video";
+  if (type === "application/pdf" || /\.pdf$/i.test(f.name)) return "pdf";
+  const ext = (f.name.includes(".") ? f.name.split(".").pop() : f.name).toLowerCase();
+  if (type.startsWith("text/") || /(json|xml|javascript|typescript|yaml|toml|x-sh|sql)/.test(type) || TEXT_EXTENSIONS.has(ext)) return "text";
+  return null;
 }
 
 function renderImagePreview(){
@@ -74,18 +106,30 @@ function renderImagePreview(){
   if (pendingImages.length === 0){ wrap.classList.add("hidden"); wrap.innerHTML=""; return; }
   wrap.classList.remove("hidden");
   wrap.innerHTML = "";
-  for (const img of pendingImages){
+  for (const item of pendingImages){
     const div = document.createElement("div");
-    div.className = "img-thumb";
-    div.innerHTML = `<img src="${img.dataUrl}" alt="${esc(img.name)}"><button class="remove" title="Remove">${ICONS.close}</button><span class="size">${esc(formatBytes(img.size))}</span>`;
-    div.querySelector(".remove").addEventListener("click", ()=> removePendingImage(img.id));
-    div.querySelector("img").addEventListener("click", ()=> window.open(img.dataUrl, "_blank"));
+    div.className = "img-thumb" + (item.kind !== "image" ? " media-" + item.kind : "");
+    div.title = `${item.name} · ${formatBytes(item.size)}`;
+    if (item.kind === "image") {
+      div.innerHTML = `<img src="${item.dataUrl}" alt="${esc(item.name)}">`;
+      div.querySelector("img").addEventListener("click", ()=> window.open(item.dataUrl, "_blank"));
+    } else if (item.kind === "video") {
+      div.innerHTML = `<video src="${item.dataUrl}" muted preload="metadata" playsinline></video><span class="media-badge" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>`;
+    } else {
+      div.innerHTML = `<span class="doc-icon" aria-hidden="true">PDF</span><span class="doc-name">${esc(item.name)}</span>`;
+    }
+    const rm = document.createElement("button");
+    rm.className = "remove";
+    rm.title = `Remove ${item.name}`;
+    rm.setAttribute("aria-label", rm.title);
+    rm.innerHTML = ICONS.close;
+    rm.addEventListener("click", ()=> removePendingImage(item.id));
+    const size = document.createElement("span");
+    size.className = "size";
+    size.textContent = formatBytes(item.size);
+    div.append(rm, size);
     wrap.append(div);
   }
-  const more = document.createElement("div");
-  more.style.cssText="font-size:10px;color:var(--dim2);align-self:center;padding:4px 6px";
-  more.textContent = `${pendingImages.length}/${MAX_IMAGES} · ${formatBytes(pendingImages.reduce((a,b)=>a+b.size,0))}`;
-  wrap.append(more);
 }
 
 function removePendingImage(id){
@@ -100,43 +144,67 @@ function clearPendingImages(){
   if (inp) inp.value = "";
 }
 
+function addTextUpload(f){
+  if (f.size > MAX_TEXT_UPLOAD_BYTES) { uploadNotice(`✗ ${f.name} is too large to attach as text (${formatBytes(f.size)} > ${formatBytes(MAX_TEXT_UPLOAD_BYTES)})`); return; }
+  if (attachedFiles.length >= MAX_ATTACHED) { uploadNotice(`✗ too many attached files (max ${MAX_ATTACHED}) — remove one first`); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    let content = String(reader.result || "");
+    if (content.includes("\u0000")) { uploadNotice(`✗ ${f.name} looks like a binary file and can't be attached`); return; }
+    if (content.length > ATTACH_FILE_CAP) content = content.slice(0, ATTACH_FILE_CAP) + `\n… (truncated, ${formatBytes(f.size)} total)`;
+    let name = f.name;
+    for (let n = 2; attachedFiles.some((x) => x.path === name); n++) name = `${f.name} (${n})`;
+    if (attachedFiles.length >= MAX_ATTACHED) return;
+    attachedFiles.push({ path: name, content, upload: true });
+    renderAttachPreview();
+  };
+  reader.onerror = () => uploadNotice(`✗ failed to read ${f.name}`);
+  reader.readAsText(f);
+}
+
 function addPendingFiles(fileList){
   const files = Array.from(fileList || []);
   if (!files.length) return;
-  let added = 0;
-  let skipped = 0;
   let total = pendingImages.reduce((a,b)=>a+b.size,0);
+  const unsupported = [];
   for (const f of files){
-    if (!f.type || !f.type.startsWith("image/")){
-      // skip non-images
-      skipped++;
-      continue;
-    }
-    if (pendingImages.length >= MAX_IMAGES){ skipped++; continue; }
-    if (f.size > MAX_IMAGE_BYTES){
-      addMsg("system", `✗ ${f.name} too large (${formatBytes(f.size)} > ${formatBytes(MAX_IMAGE_BYTES)})`);
+    const kind = uploadKind(f);
+    if (!kind) { unsupported.push(f.name); continue; }
+    if (kind === "text") { addTextUpload(f); continue; }
+    if (pendingImages.length >= MAX_IMAGES){ uploadNotice(`✗ ${f.name} skipped — up to ${MAX_IMAGES} images, videos or PDFs per message`); continue; }
+    if (f.size > MEDIA_LIMITS[kind]){
+      uploadNotice(`✗ ${f.name} is too large (${formatBytes(f.size)} > ${formatBytes(MEDIA_LIMITS[kind])} for ${kind === "pdf" ? "PDFs" : kind + "s"})`);
       continue;
     }
     if (total + f.size > MAX_TOTAL_BYTES){
-      addMsg("system", `✗ not enough budget for ${f.name} (${formatBytes(total+f.size)} > ${formatBytes(MAX_TOTAL_BYTES)})`);
+      uploadNotice(`✗ not enough room for ${f.name} (${formatBytes(total+f.size)} > ${formatBytes(MAX_TOTAL_BYTES)} per message)`);
       continue;
     }
-    // read as dataURL
     const reader = new FileReader();
     const id = ++imageSeq;
-    const name = f.name;
-    const size = f.size;
+    const { name, size } = f;
+    const mime = f.type || (kind === "pdf" ? "application/pdf" : "");
     reader.onload = () => {
-      const dataUrl = reader.result;
-      pendingImages.push({ id, name, dataUrl, size });
+      pendingImages.push({ id, kind, name, mime, dataUrl: reader.result, size });
       renderImagePreview();
     };
-    reader.onerror = () => addMsg("system", `✗ failed to read ${name}`);
+    reader.onerror = () => uploadNotice(`✗ failed to read ${name}`);
     reader.readAsDataURL(f);
     total += f.size;
-    added++;
   }
-  if (skipped) addMsg("system", `↷ skipped ${skipped} non-image or over-limit file(s)`);
+  if (unsupported.length) uploadNotice(`✗ can't attach ${unsupported.join(", ")} — supported: images, videos, PDFs, and text or code files`);
+}
+
+// Media parts in a stored user message → display list
+function mediaFromContent(content){
+  if (!Array.isArray(content)) return [];
+  const out = [];
+  for (const c of content){
+    if (c?.type === "image_url" && c.image_url?.url) out.push({ kind: "image", url: c.image_url.url });
+    else if (c?.type === "video_url" && c.video_url?.url) out.push({ kind: "video", url: c.video_url.url });
+    else if (c?.type === "file" && c.file) out.push({ kind: "pdf", url: c.file.file_data, name: c.file.filename || "document.pdf" });
+  }
+  return out;
 }
 
 /* ── @ file-attach ─────────────────────────────────────────────── */
@@ -350,12 +418,18 @@ function attachedBlock(files) {
 }
 
 // Expand internal message shape ({attachments}) to plain API content
-function expandMessageForApi(m) {
+function expandMessageForApi(m, keepHeavyMedia = true) {
   const { attachments, ...rest } = m || {};
+  if (!keepHeavyMedia && m && m.role === "user" && Array.isArray(rest.content)) {
+    rest.content = rest.content.map((c) =>
+      c?.type === "video_url" ? { type: "text", text: "[A video was shared earlier in this chat]" }
+      : c?.type === "file" ? { type: "text", text: `[A file was shared earlier in this chat: ${c.file?.filename || "document"}]` }
+      : c);
+  }
   if (m && m.role === "user" && attachments && attachments.length) {
     const block = attachedBlock(attachments);
-    if (typeof m.content === "string") return { ...rest, content: `${block}\n${m.content}` };
-    if (Array.isArray(m.content)) return { ...rest, content: [{ type: "text", text: block }, ...m.content] };
+    if (typeof rest.content === "string") return { ...rest, content: `${block}\n${rest.content}` };
+    if (Array.isArray(rest.content)) return { ...rest, content: [{ type: "text", text: block }, ...rest.content] };
   }
   return rest;
 }
@@ -674,18 +748,34 @@ function addMsg(role, text, opts = {}) {
   head.innerHTML = role === "user" ? `<span style="color:var(--accent);display:inline-flex;vertical-align:middle">${ICONS.dot}</span> you` : role === "system" ? `<span style="color:var(--dim);display:inline-flex;vertical-align:middle">${ICONS.dot}</span> system` : `<span style="color:var(--accent);display:inline-flex;vertical-align:middle">${ICONS.dot}</span> ${esc(opts.label || currentModel || "meteor")}`;
   const body = document.createElement("div");
   body.className = "msg-body";
-  if (opts.images && opts.images.length) {
-    const imgRow = document.createElement("div");
-    imgRow.className = "msg-images";
-    for (const u of opts.images) {
-      const im = document.createElement("img");
-      im.src = u;
-      im.loading = "lazy";
-      im.alt = "attachment";
-      im.addEventListener("click", () => window.open(u, "_blank"));
-      imgRow.append(im);
+  const media = [...(opts.media || []), ...(opts.images || []).map((url) => ({ kind: "image", url }))];
+  if (media.length) {
+    const row = document.createElement("div");
+    row.className = "msg-images";
+    for (const item of media) {
+      if (item.kind === "video") {
+        const v = document.createElement("video");
+        v.src = item.url;
+        v.controls = true;
+        v.preload = "metadata";
+        v.playsInline = true;
+        row.append(v);
+      } else if (item.kind === "pdf") {
+        const d = document.createElement("span");
+        d.className = "attach-chip-static msg-doc";
+        d.title = item.name || "PDF";
+        d.innerHTML = `<span class="doc-icon" aria-hidden="true">PDF</span><span>${esc(item.name || "document.pdf")}</span>`;
+        row.append(d);
+      } else {
+        const im = document.createElement("img");
+        im.src = item.url;
+        im.loading = "lazy";
+        im.alt = "Attached image";
+        im.addEventListener("click", () => window.open(item.url, "_blank"));
+        row.append(im);
+      }
     }
-    body.append(imgRow);
+    body.append(row);
   }
   if (opts.attachments && opts.attachments.length) {
     const row = document.createElement("div");
@@ -709,7 +799,7 @@ function addMsg(role, text, opts = {}) {
       t.textContent = text;
       t.style.whiteSpace = "pre-wrap";
       body.append(t);
-    } else if (!opts.images || !opts.images.length) {
+    } else if (!media.length && !(opts.attachments && opts.attachments.length)) {
       body.textContent = "";
     }
   }
@@ -1044,6 +1134,10 @@ async function refreshProjects(){
     if (!window.meteorAPI?.projects?.list) return;
     const list = await window.meteorAPI.projects.list();
     projectsCache = Array.isArray(list) ? list : [];
+    await Promise.all(projectsCache.map(async (p) => {
+      try { chatsCache.set(p.id, await window.meteorAPI.chats.list(p.id, plainTitle(p.name))); }
+      catch { chatsCache.set(p.id, []); }
+    }));
   } catch(e){ console.warn("listProjects", e); projectsCache = []; }
   renderProjects();
 }
@@ -1059,86 +1153,87 @@ function plainTitle(s) {
     .trim();
 }
 
+function projectLabel(p){
+  return (p.folder_path || "").split("/").filter(Boolean).pop() || plainTitle(p.name) || "Project";
+}
+
 function renderProjects(){
   const container = document.getElementById("sb-projects");
   const tree = document.getElementById("tree");
   const gitPanel = document.getElementById("git-panel");
   if (!container) return;
-  // preserve tree and gitPanel
-  const treeClone = tree;
-  const gitClone = gitPanel;
-  // clear container
   container.innerHTML = "";
+  const keepHidden = () => { if (tree) container.append(tree); if (gitPanel) container.append(gitPanel); };
   if (!currentUser){
     const empty = document.createElement("div");
     empty.className = "sb-empty";
-    empty.textContent = "Sign in to see projects";
+    empty.textContent = "Sign in to see your projects";
     container.append(empty);
-    if (treeClone) container.append(treeClone);
-    if (gitClone) container.append(gitClone);
+    keepHidden();
     return;
   }
   if (projectsCache.length === 0){
     const empty = document.createElement("div");
     empty.className = "sb-empty";
-    empty.textContent = "No projects yet — open a folder and send a message to create one";
+    empty.textContent = "Open a folder and send a message to start a project";
     container.append(empty);
-  } else {
-    for (const p of projectsCache){
-      const isActive = p.id === currentProjectId;
-      const isExpanded = expandedProjects.has(p.id) || isActive;
-      const group = document.createElement("div");
-      group.className = "project-group";
-      const row = document.createElement("button");
-      row.className = "proj-row" + (isActive ? " active" : "");
-      row.title = `${plainTitle(p.name)} — ${p.folder_path}\n${p.last_message || ""}\nClick to toggle chats, right-click to delete`;
-      const folderIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/></svg>`;
-      row.innerHTML = `${folderIcon} <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left">${esc(plainTitle(p.name))}</span><small style="color:var(--dim2);font-family:var(--mono);font-size:10px">${timeAgo(p.updated_at)}</small><span class="chev">${isExpanded ? ICONS.chevronDown : ICONS.chevronRight}</span>`;
-      if (isActive) row.style.background = "rgba(255,106,42,.1)";
-      const chats = document.createElement("div");
-      chats.className = "project-chats" + (isExpanded ? "" : " hidden");
-      if (p.last_message){
-        const prev = document.createElement("button");
-        prev.className = "sb-history-row";
-        prev.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:left">${esc(p.last_message.slice(0,40))}</span><small>${timeAgo(p.updated_at)}</small>`;
-        prev.title = p.last_message + "\nClick to open project";
-        prev.addEventListener("click", (e)=>{ e.stopPropagation(); switchProject(p.id); });
-        chats.append(prev);
-      } else {
-        const emptyChat = document.createElement("div");
-        emptyChat.className = "sb-empty";
-        emptyChat.style.fontSize = "11px";
-        emptyChat.textContent = "No chats yet";
-        chats.append(emptyChat);
-      }
-      const openBtn = document.createElement("button");
-      openBtn.className = "sb-history-row";
-      openBtn.style.color = "var(--dim2)";
-      openBtn.innerHTML = `<span>↗ Open folder</span><small style="opacity:.6">${esc(p.folder_path.split("/").pop() || "")}</small>`;
-      openBtn.title = p.folder_path;
-      openBtn.addEventListener("click", async (e)=>{ e.stopPropagation(); try{ const scan = await window.meteorAPI.refreshWorkspace(p.folder_path); if (scan) setWorkspace(scan); }catch{} switchProject(p.id); });
-      chats.append(openBtn);
-      row.addEventListener("click", ()=>{
-        const nowHidden = chats.classList.contains("hidden");
-        if (nowHidden){ chats.classList.remove("hidden"); expandedProjects.add(p.id); const c=row.querySelector(".chev"); if(c) c.innerHTML=ICONS.chevronDown; }
-        else { chats.classList.add("hidden"); expandedProjects.delete(p.id); const c=row.querySelector(".chev"); if(c) c.innerHTML=ICONS.chevronRight; }
-        persistExpanded();
-        if (!isActive) switchProject(p.id);
-      });
-      row.addEventListener("contextmenu", async (e)=>{
-        e.preventDefault();
-        if (!confirm(`Delete project "${p.name}"?`)) return;
-        try{ await window.meteorAPI.projects.delete(p.id); }catch(err){ addMsg("system", String(err)); return; }
-        expandedProjects.delete(p.id); persistExpanded();
-        if (currentProjectId === p.id){ currentProjectId = null; localStorage.removeItem("meteor:currentProjectId"); chatHistory = []; els.messages.innerHTML=""; const w = document.createElement("div"); w.className="msg assistant"; w.innerHTML='<div class="msg-head"><span style="color:var(--accent);display:inline-flex;vertical-align:middle"><svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="currentColor"/></svg></span> meteor</div><div class="msg-body tui-box">Project deleted — select another or create a new one.</div>'; els.messages.append(w); updateCenterVisibility(); }
-        await refreshProjects();
-      });
-      group.append(row, chats);
-      container.append(group);
-    }
+    keepHidden();
+    return;
   }
-  if (treeClone) container.append(treeClone);
-  if (gitClone) container.append(gitClone);
+  for (const p of projectsCache){
+    const chats = chatsCache.get(p.id) || [];
+    const isActiveProject = p.id === currentProjectId;
+    const isExpanded = !expandedProjects.has("collapsed:" + p.id);
+    const group = document.createElement("div");
+    group.className = "project-group";
+    group.dataset.projectId = p.id;
+
+    const head = document.createElement("div");
+    head.className = "proj-head";
+    const row = document.createElement("button");
+    row.className = "proj-row" + (isActiveProject ? " active" : "");
+    row.dataset.projectId = p.id;
+    row.title = p.folder_path;
+    row.innerHTML = `<span class="chev">${isExpanded ? ICONS.chevronDown : ICONS.chevronRight}</span><span class="proj-name">${esc(projectLabel(p))}</span>`;
+    const add = document.createElement("button");
+    add.className = "proj-add icon-mini";
+    add.title = `New chat in ${projectLabel(p)}`;
+    add.setAttribute("aria-label", add.title);
+    add.innerHTML = ICONS.plus;
+    head.append(row, add);
+
+    const list = document.createElement("div");
+    list.className = "project-chats" + (isExpanded ? "" : " hidden");
+    if (!chats.length){
+      const empty = document.createElement("div");
+      empty.className = "sb-empty sb-empty-sm";
+      empty.textContent = "No chats yet";
+      list.append(empty);
+    }
+    for (const c of chats){
+      const item = document.createElement("button");
+      item.className = "sb-history-row" + (isActiveProject && c.id === currentChatId ? " active" : "");
+      item.dataset.projectId = p.id;
+      item.dataset.chatId = c.id;
+      item.title = c.preview || c.title;
+      item.innerHTML = `<span>${esc(plainTitle(c.title) || "Untitled chat")}</span><small>${timeAgo(new Date(c.updatedAt).toISOString())}</small>`;
+      item.addEventListener("click", () => openChat(p.id, c.id));
+      list.append(item);
+    }
+
+    row.addEventListener("click", () => {
+      const hidden = list.classList.toggle("hidden");
+      if (hidden) expandedProjects.add("collapsed:" + p.id); else expandedProjects.delete("collapsed:" + p.id);
+      persistExpanded();
+      const chev = row.querySelector(".chev");
+      if (chev) chev.innerHTML = hidden ? ICONS.chevronRight : ICONS.chevronDown;
+    });
+    add.addEventListener("click", (e) => { e.stopPropagation(); startNewChat(p.id); });
+
+    group.append(head, list);
+    container.append(group);
+  }
+  keepHidden();
 }
 
 async function ensureProjectForCurrentMessage(firstMessage){
@@ -1160,8 +1255,7 @@ async function ensureProjectForCurrentMessage(firstMessage){
   // look for existing project with same folder_path
   const sameFolder = projectsCache.find(p=> p.folder_path === folderPath);
   if (sameFolder){
-    currentProjectId = sameFolder.id;
-    localStorage.setItem("meteor:currentProjectId", currentProjectId);
+    if (currentProjectId !== sameFolder.id) setCurrentChat(sameFolder.id, null);
     try{ await window.meteorAPI.projects.update(sameFolder.id, { last_message: firstMessage.slice(0,200), preview: firstMessage.slice(0,120) }); } catch{}
     await refreshProjects();
     return sameFolder.id;
@@ -1169,9 +1263,9 @@ async function ensureProjectForCurrentMessage(firstMessage){
   // create new
   try{
     const proj = await window.meteorAPI.projects.create({ name, folder_path: folderPath, last_message: firstMessage.slice(0,200) });
-    currentProjectId = proj.id;
-    localStorage.setItem("meteor:currentProjectId", currentProjectId);
+    setCurrentChat(proj.id, null);
     projectsCache.unshift(proj);
+    chatsCache.set(proj.id, []);
     renderProjects();
     return proj.id;
   } catch(e){
@@ -1180,56 +1274,85 @@ async function ensureProjectForCurrentMessage(firstMessage){
   }
 }
 
-async function switchProject(id){
-  if (!id || id === currentProjectId) return;
-  // save current chat to previous project
-  if (currentProjectId && chatHistory.length){
-    try{ await window.meteorAPI.projects.saveMessages(currentProjectId, chatHistory); } catch{}
-    try{ await window.meteorAPI.projects.update(currentProjectId, { last_message: chatHistory.filter(m=>m.role==="user").pop()?.content ? String(chatHistory.filter(m=>m.role==="user").pop().content).slice(0,200) : undefined }); } catch{}
-  }
-  const proj = projectsCache.find(p=>p.id===id) || await window.meteorAPI.projects.get(id).catch(()=>null);
-  if (!proj) { addMsg("system", "Project not found"); return; }
-  currentProjectId = id;
-  localStorage.setItem("meteor:currentProjectId", id);
-  renderProjects();
-  // load folder as workspace if exists
-  if (proj.folder_path){
-    try{
-      const scan = await window.meteorAPI.refreshWorkspace(proj.folder_path);
-      if (scan && scan.root) setWorkspace(scan);
-      else {
-        // fallback: try openWorkspace scan
-        const s = await window.meteorAPI.refreshWorkspace(proj.folder_path);
-        if (s) setWorkspace(s);
-      }
-    } catch(e){ console.warn("switchProject workspace", e); }
-  }
-  // load messages
-  try{
-    const msgs = await window.meteorAPI.projects.loadMessages(id);
-    chatHistory = Array.isArray(msgs) ? msgs : [];
-    els.messages.innerHTML = "";
-    const welcome = document.createElement("div");
-    welcome.className = "msg assistant";
-    welcome.style.display = "none";
-    welcome.innerHTML = '<div class="msg-head"><span style="color:var(--accent);display:inline-flex;vertical-align:middle"><svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="currentColor"/></svg></span> meteor</div><div class="msg-body tui-box">Project: ' + esc(plainTitle(proj.name)) + ' — ' + esc(proj.folder_path) + '</div>';
-    els.messages.append(welcome);
-    for (let i=0; i<chatHistory.length; i++){
-      const m = chatHistory[i];
-      if (m.role === "user"){
-        const txt = typeof m.content === "string" ? m.content : (Array.isArray(m.content) ? m.content.map((c)=>c.text||"").join(" ") : String(m.content));
-        const imgs = Array.isArray(m.content) ? m.content.filter((c)=>c.type==="image_url").map((c)=>c.image_url?.url).filter(Boolean) : [];
-        addMsg("user", txt, { images: imgs, attachments: m.attachments || [], chatIndex: i });
-      } else if (m.role === "assistant"){
-        const txt = typeof m.content === "string" ? m.content : String(m.content);
-        addMsg("assistant", txt, { chatIndex: i });
-      } else {
-        addMsg(m.role, typeof m.content === "string" ? m.content : String(m.content));
-      }
+// Save the open chat (creates it on first save) and refresh the sidebar entry.
+async function persistChat(){
+  if (!currentProjectId || !chatHistory.length || !window.meteorAPI?.chats) return null;
+  try {
+    const meta = await window.meteorAPI.chats.save(currentProjectId, currentChatId, chatHistory);
+    if (meta?.id) {
+      setCurrentChat(currentProjectId, meta.id);
+      const list = (chatsCache.get(currentProjectId) || []).filter((c) => c.id !== meta.id);
+      chatsCache.set(currentProjectId, [meta, ...list]);
+      renderProjects();
     }
-    updateCenterVisibility();
-    addMsg("system", `↪ switched to ${plainTitle(proj.name)}`);
-  } catch(e){ console.warn("loadMessages", e); }
+    return meta;
+  } catch (e) { console.warn("persistChat", e); return null; }
+}
+
+async function loadProjectWorkspace(proj){
+  if (!proj?.folder_path || workspace?.root === proj.folder_path) return;
+  try {
+    const scan = await window.meteorAPI.refreshWorkspace(proj.folder_path);
+    if (scan && scan.root) setWorkspace(scan);
+  } catch (e) { console.warn("load workspace", e); }
+}
+
+function renderChatHistory(){
+  els.messages.innerHTML = "";
+  for (let i = 0; i < chatHistory.length; i++){
+    const m = chatHistory[i];
+    if (m.role === "user"){
+      const txt = typeof m.content === "string" ? m.content : (Array.isArray(m.content) ? m.content.map((c)=>c.text||"").join(" ") : String(m.content));
+      addMsg("user", txt, { media: mediaFromContent(m.content), attachments: m.attachments || [], chatIndex: i });
+    } else if (m.role === "assistant"){
+      addMsg("assistant", typeof m.content === "string" ? m.content : String(m.content), { chatIndex: i });
+    }
+  }
+  updateCenterVisibility();
+  els.messages.scrollTop = els.messages.scrollHeight;
+}
+
+// Open a saved chat: its project folder becomes the workspace and the full history is restored.
+async function openChat(projectId, chatId){
+  if (busy) { addMsg("system", "Wait for the current reply to finish before switching chats."); return; }
+  if (projectId === currentProjectId && chatId === currentChatId && chatHistory.length) return;
+  await persistChat();
+  const proj = projectsCache.find((p) => p.id === projectId) || await window.meteorAPI.projects.get(projectId).catch(() => null);
+  if (!proj) { addMsg("system", "Project not found"); return; }
+  setCurrentChat(projectId, chatId);
+  renderProjects();
+  await loadProjectWorkspace(proj);
+  try {
+    const msgs = await window.meteorAPI.chats.load(projectId, chatId);
+    chatHistory = Array.isArray(msgs) ? msgs : [];
+  } catch (e) { console.warn("load chat", e); chatHistory = []; }
+  clearAttachedFiles();
+  renderChatHistory();
+  const cp = document.getElementById("cc-project-name");
+  if (cp) cp.textContent = projectLabel(proj);
+}
+
+// Start an empty chat in a project; it is saved on the first message.
+async function startNewChat(projectId){
+  if (busy) return;
+  await persistChat();
+  const proj = projectId ? projectsCache.find((p) => p.id === projectId) : null;
+  setCurrentChat(proj ? proj.id : currentProjectId, null);
+  if (proj) await loadProjectWorkspace(proj);
+  chatHistory = [];
+  clearAttachedFiles();
+  els.messages.innerHTML = "";
+  updateCenterVisibility();
+  renderProjects();
+  els.input?.focus();
+}
+
+// Kept for older callers: open a project's most recent chat (or a new one).
+async function switchProject(id){
+  if (!id) return;
+  const chats = chatsCache.get(id) || [];
+  if (chats.length) await openChat(id, chats[0].id);
+  else await startNewChat(id);
 }
 
 function buildTreeModel() {
@@ -2254,9 +2377,9 @@ async function sendCurrent() {
     const expanded = window.meteorExt?.expandCommand?.(text);
     if (expanded) text = expanded;
   }
-  // capture images + @attachments before clearing
+  // capture uploads + @attachments before clearing
   const imgs = [...pendingImages];
-  const imageUrls = imgs.map(i=>i.dataUrl);
+  const sentMedia = imgs.map((i) => ({ kind: i.kind, url: i.dataUrl, name: i.name }));
   const attachList = [...attachedFiles];
   // resolve @tokens typed manually (never picked from the popup) into attachments
   for (const tok of extractMentionTokens(text)) {
@@ -2279,20 +2402,22 @@ async function sendCurrent() {
   if (hasImages) {
     const parts = [];
     if (text) parts.push({ type: "text", text });
-    for (const im of imgs) parts.push({ type: "image_url", image_url: { url: im.dataUrl } });
+    for (const im of imgs) {
+      if (im.kind === "video") parts.push({ type: "video_url", video_url: { url: im.dataUrl } });
+      else if (im.kind === "pdf") parts.push({ type: "file", file: { filename: im.name, file_data: im.dataUrl } });
+      else parts.push({ type: "image_url", image_url: { url: im.dataUrl } });
+    }
     userContent = parts;
   } else {
     userContent = text;
   }
   chatHistory.push({ role: "user", content: userContent, ...(attachList.length ? { attachments: attachList } : {}) });
-  addMsg("user", text, { images: imageUrls, attachments: attachList, chatIndex: chatHistory.length - 1 });
+  addMsg("user", text, { media: sentMedia, attachments: attachList, chatIndex: chatHistory.length - 1 });
   // meteor_projects: create on first message for this folder
   if (currentUser) {
     try {
-      const pid = await ensureProjectForCurrentMessage(text || (imageUrls.length ? "[image]" : ""));
-      if (pid) {
-        try { await window.meteorAPI.projects.saveMessages(pid, chatHistory); } catch {}
-      }
+      const pid = await ensureProjectForCurrentMessage(text || (sentMedia.length ? `[${sentMedia[0].kind}]` : ""));
+      if (pid) await persistChat();
     } catch(e){ console.warn("ensureProject", e); }
   }
   const reasoningLabel = currentReasoningEffort ? ` · ${effortLabel(currentReasoningEffort)}` : "";
@@ -2381,7 +2506,7 @@ async function sendCurrent() {
   };
   setBusy(true);
   const stop = window.meteorAPI.stream(
-    { modelKey: currentModel, reasoningEffort: currentReasoningEffort, messages: [{ role: "system", content: buildSystemMessage() }, ...chatHistory.map(expandMessageForApi)] },
+    { modelKey: currentModel, reasoningEffort: currentReasoningEffort, messages: [{ role: "system", content: buildSystemMessage() }, ...chatHistory.map((m, i, all) => expandMessageForApi(m, i === all.length - 1))] },
     {
       onChunk: (delta) => {
         bump();
@@ -2473,14 +2598,15 @@ async function sendCurrent() {
         if (chatHistory.length > 80) chatHistory.splice(0, chatHistory.length - 80);
         // persist to meteor_projects
         if (currentProjectId) {
-          try { await window.meteorAPI.projects.saveMessages(currentProjectId, chatHistory); } catch {}
-          try { await window.meteorAPI.projects.update(currentProjectId, { last_message: acc.slice(0,200) || text.slice(0,200), preview: acc.slice(0,120) }); await refreshProjects(); } catch {}
-          // Sunlight 2 Pro title generation after first exchange
-          if (chatHistory.length === 2) {
-            const firstUserText = text;
-            const firstAssistantText = acc;
-            window.meteorAPI.projects.generateTitle(currentProjectId, firstUserText, firstAssistantText).then(async (res)=>{
-              if (res?.title) await refreshProjects();
+          const meta = await persistChat();
+          try { await window.meteorAPI.projects.update(currentProjectId, { last_message: acc.slice(0,200) || text.slice(0,200), preview: acc.slice(0,120) }); } catch {}
+          // name the chat after the first exchange
+          if (meta && chatHistory.length === 2) {
+            const pid = currentProjectId;
+            window.meteorAPI.chats.generateTitle(pid, meta.id, text, acc).then((renamed)=>{
+              if (!renamed?.id) return;
+              chatsCache.set(pid, (chatsCache.get(pid) || []).map((c) => c.id === renamed.id ? renamed : c));
+              renderProjects();
             }).catch(e=> console.warn("title generation", e?.message || String(e)));
           }
         }
@@ -2733,6 +2859,21 @@ function setTerminalVisible(v, opts = {}) {
   }
 }
 function toggleTerminal(){ setTerminalVisible(!termVisible); }
+
+let sidebarVisible = localStorage.getItem("meteor:sidebarVisible") !== "false";
+function setSidebarVisible(v){
+  sidebarVisible = !!v;
+  try { localStorage.setItem("meteor:sidebarVisible", String(sidebarVisible)); } catch {}
+  document.body.classList.toggle("sidebar-collapsed", !sidebarVisible);
+  const btn = document.getElementById("sidebar-toggle");
+  if (btn) {
+    const label = sidebarVisible ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)";
+    btn.title = label;
+    btn.setAttribute("aria-label", label.replace(/ \(.*\)$/, ""));
+    btn.setAttribute("aria-expanded", String(sidebarVisible));
+  }
+}
+function toggleSidebar(){ setSidebarVisible(!sidebarVisible); }
 
 let editorVisible = localStorage.getItem("meteor:editorVisible") !== "false";
 function updateDockHidden(){
@@ -3582,32 +3723,12 @@ function initChatContextMenu(){
     const msg = e.target.closest && e.target.closest(".msg");
     if (hist){
       e.preventDefault();
-      const projId = hist.dataset.projectId || hist.closest(".project-group")?.querySelector(".proj-row")?.dataset.projectId;
-      // try to find project id from closest group
-      let pid = null;
-      const group = hist.closest(".project-group");
-      if (group){
-        const r = group.querySelector(".proj-row");
-        // find by title or look up in cache
-        const title = r ? r.title.split(" — ")[0] : "";
-        const found = projectsCache.find(p=> p.name===title || p.last_message===hist.title);
-        if (found) pid = found.id;
-      }
-      if (!pid && currentProjectId) pid = currentProjectId;
-      showChatContextMenu(e.clientX, e.clientY, {type:"history", projectId: pid, element: hist});
+      showChatContextMenu(e.clientX, e.clientY, {type:"history", projectId: hist.dataset.projectId, chatId: hist.dataset.chatId, element: hist});
       return;
     }
     if (projRow && !hist){
-      // right click on project row already handled for delete project, but also show menu to delete project
-      // let default project delete handle via contextmenu, but also show our menu
-      // we will let the existing project delete logic handle, but also show menu
-      // For now, don't override project row delete — let it show menu as well
-      // Use same menu but action will delete project
       e.preventDefault();
-      const title = projRow.title.split(" — ")[0];
-      const found = projectsCache.find(p=> p.name===title);
-      const pid = found ? found.id : currentProjectId;
-      showChatContextMenu(e.clientX, e.clientY, {type:"project", projectId: pid, element: projRow});
+      showChatContextMenu(e.clientX, e.clientY, {type:"project", projectId: projRow.dataset.projectId, element: projRow});
       return;
     }
     if (msg){
@@ -3674,9 +3795,8 @@ function initChatContextMenu(){
             }
           });
           // persist
-          if (currentProjectId){
-            try{ await window.meteorAPI.projects.saveMessages(currentProjectId, chatHistory); }catch{}
-            try{ await window.meteorAPI.projects.update(currentProjectId, { last_message: chatHistory.filter(m=>m.role==="user").pop()?.content ? String(chatHistory.filter(m=>m.role==="user").pop().content).slice(0,200) : "" }); await refreshProjects(); }catch{}
+          if (currentProjectId && currentChatId){
+            try{ await window.meteorAPI.chats.save(currentProjectId, currentChatId, chatHistory); }catch{}
           }
           updateCenterVisibility();
         } else {
@@ -3687,26 +3807,23 @@ function initChatContextMenu(){
         const pid = target.projectId;
         if (!pid) return;
         if (target.type==="history"){
-          if (!confirm("Delete this chat's messages? This will clear the conversation for this project.")) return;
+          if (!target.chatId || !confirm("Delete this chat? This cannot be undone.")) return;
           try{
-            // clear messages for this project
-            await window.meteorAPI.projects.saveMessages(pid, []);
-            await window.meteorAPI.projects.update(pid, { last_message: "", preview: "", message_count: 0 });
-            if (currentProjectId===pid){
+            await window.meteorAPI.chats.delete(pid, target.chatId);
+            chatsCache.set(pid, (chatsCache.get(pid) || []).filter((c) => c.id !== target.chatId));
+            if (currentProjectId===pid && currentChatId===target.chatId){
+              setCurrentChat(pid, null);
               chatHistory = [];
               els.messages.innerHTML = "";
-              const w = document.createElement("div");
-              w.className="msg assistant";
-              w.innerHTML='<div class="msg-head"><span style="color:var(--accent);display:inline-flex;vertical-align:middle">'+ICONS.dot+'</span> meteor</div><div class="msg-body tui-box">Chat cleared.</div>';
-              els.messages.append(w);
               updateCenterVisibility();
             }
-            await refreshProjects();
+            renderProjects();
           }catch(err){ addMsg("system", String(err)); }
         } else if (target.type==="project"){
           if (!confirm("Delete this project? This cannot be undone.")) return;
           try{ await window.meteorAPI.projects.delete(pid); }catch(err){ addMsg("system", String(err)); return; }
-          if (currentProjectId===pid){ currentProjectId=null; localStorage.removeItem("meteor:currentProjectId"); chatHistory=[]; els.messages.innerHTML=""; const w=document.createElement("div"); w.className="msg assistant"; w.innerHTML='<div class="msg-head"><span style="color:var(--accent);display:inline-flex;vertical-align:middle">'+ICONS.dot+'</span> meteor</div><div class="msg-body tui-box">Project deleted.</div>'; els.messages.append(w); updateCenterVisibility(); }
+          chatsCache.delete(pid);
+          if (currentProjectId===pid){ setCurrentChat(null, null); chatHistory=[]; els.messages.innerHTML=""; updateCenterVisibility(); }
           await refreshProjects();
         }
       }
@@ -3854,6 +3971,8 @@ async function init() {
     applyTheme(cur);
   });
   if (navigator.platform.toLowerCase().includes("mac")) document.body.classList.add("platform-mac");
+  setSidebarVisible(sidebarVisible);
+  document.getElementById("sidebar-toggle")?.addEventListener("click", toggleSidebar);
 
   // gate: must sign in via Supabase before using Meteor
   try { initAuth(); } catch(e){ console.error("initAuth", e); }
@@ -3873,8 +3992,12 @@ async function init() {
     if (currentProjectId) {
       const exists = projectsCache.find(p=>p.id===currentProjectId);
       if (exists) {
-        // load its workspace silently
-        try { await switchProject(currentProjectId); } catch {}
+        const chats = chatsCache.get(currentProjectId) || [];
+        const chatId = chats.some((c) => c.id === currentChatId) ? currentChatId : chats[0]?.id;
+        try {
+          if (chatId) { const pid = currentProjectId; currentProjectId = null; await openChat(pid, chatId); }
+          else await loadProjectWorkspace(exists);
+        } catch (e) { console.warn("restore chat", e); }
       } else {
         currentProjectId = null;
         localStorage.removeItem("meteor:currentProjectId");
@@ -3987,6 +4110,9 @@ async function init() {
   autoSizeInput();
 
   const clearChat = () => {
+    if (busy) return;
+    setCurrentChat(currentProjectId, null);
+    renderProjects();
     chatHistory = [];
     clearAttachedFiles();
     hideMentionPopup();
@@ -4061,12 +4187,10 @@ async function init() {
   const searchClear = document.getElementById("search-clear");
   $("#sb-search-btn")?.addEventListener("click", () => {
     if (!searchWrap || !searchInput) return;
-    const wasHidden = searchWrap.classList.contains("hidden");
-    if (wasHidden){ searchWrap.classList.remove("hidden"); searchInput.focus(); searchInput.select(); }
-    else {
-      if (chatSearchQuery){ chatSearchQuery=""; searchInput.value=""; applyChatSearchFilter(); }
-      searchWrap.classList.add("hidden");
-    }
+    // search field is always visible in the sidebar; ⌘K just focuses it
+    searchWrap.classList.remove("hidden");
+    searchInput.focus();
+    searchInput.select();
   });
   if (searchInput){
     searchInput.addEventListener("input", ()=>{
@@ -4074,7 +4198,7 @@ async function init() {
       applyChatSearchFilter();
     });
     searchInput.addEventListener("keydown", (e)=>{
-      if (e.key==="Escape"){ e.preventDefault(); chatSearchQuery=""; searchInput.value=""; applyChatSearchFilter(); if(searchWrap) searchWrap.classList.add("hidden"); }
+      if (e.key==="Escape"){ e.preventDefault(); chatSearchQuery=""; searchInput.value=""; applyChatSearchFilter(); searchInput.blur(); }
       if (e.key==="Enter"){ const first = document.querySelector("#sb-projects .project-group:not([style*='display: none']) .proj-row"); if (first) first.click(); }
     });
   }
@@ -4133,12 +4257,9 @@ async function init() {
   els.input.addEventListener("paste", (e) => {
     const files = e.clipboardData?.files;
     if (files && files.length) {
-      const imgs = Array.from(files).filter(f=>f.type.startsWith("image/"));
-      if (imgs.length) {
-        e.preventDefault();
-        addPendingFiles(imgs);
-        return;
-      }
+      e.preventDefault();
+      addPendingFiles(files);
+      return;
     }
     // also check dataTransfer items for data URL?
     const items = e.clipboardData?.items;
@@ -4203,6 +4324,12 @@ async function init() {
     if (mod && (e.key.toLowerCase() === "j" || e.key === "`" || e.code === "Backquote")) {
       e.preventDefault();
       toggleTerminal();
+      return;
+    }
+    // Cmd/Ctrl+B toggle sidebar
+    if (mod && !e.shiftKey && e.key.toLowerCase() === "b") {
+      e.preventDefault();
+      toggleSidebar();
       return;
     }
     // Cmd/Ctrl+E toggle editor

@@ -91,6 +91,13 @@ contextBridge.exposeInMainWorld("meteorAPI", {
     loadMessages: (projectId) => ipcRenderer.invoke("projects:loadMessages", { projectId }),
     generateTitle: (projectId, firstMessage, firstResponse) => ipcRenderer.invoke("project:generateTitle", { projectId, firstMessage, firstResponse }),
   },
+  chats: {
+    list: (projectId, legacyTitle) => ipcRenderer.invoke("chats:list", { projectId, legacyTitle }),
+    load: (projectId, chatId) => ipcRenderer.invoke("chats:load", { projectId, chatId }),
+    save: (projectId, chatId, messages) => ipcRenderer.invoke("chats:save", { projectId, chatId, messages }),
+    delete: (projectId, chatId) => ipcRenderer.invoke("chats:delete", { projectId, chatId }),
+    generateTitle: (projectId, chatId, firstMessage, firstResponse) => ipcRenderer.invoke("chats:generateTitle", { projectId, chatId, firstMessage, firstResponse }),
+  },
   mcp: {
     get: () => ipcRenderer.invoke("mcp:get"),
     save: (servers) => ipcRenderer.invoke("mcp:save", { servers }),

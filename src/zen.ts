@@ -6,6 +6,8 @@ export const ZEN_BASE_URL = "https://opencode.ai/zen/v1";
 export type MessageContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } }
+  | { type: "video_url"; video_url: { url: string } }
+  | { type: "file"; file: { filename: string; file_data: string } }
   | { type: "input_text"; text: string }
   | { type: "input_image"; image_url: string; detail?: string };
 
