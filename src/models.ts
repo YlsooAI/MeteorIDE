@@ -21,13 +21,13 @@ export const MODELS: Record<string, MeteorModel> = {
   "sunlight-2": {
     key: "sunlight-2",
     name: "Sunlight 2",
-    zenId: "openrouter/minimax/minimax-m3.1-flash:free",
-    apiModel: "minimax/minimax-m3.1-flash:free",
+    zenId: "openrouter/recursive/flint-v1.0:free",
+    apiModel: "recursive/flint-v1.0:free",
     protocol: "chat",
     provider: "openrouter",
     baseUrl: OPENROUTER_URL,
     description: "Sunlight 2",
-    inputs: ["image", "video", "file"],
+    inputs: [],
   },
   "sunlight-2-pro": {
     key: "sunlight-2-pro",
