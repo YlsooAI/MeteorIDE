@@ -145,7 +145,7 @@ ipcMain.handle("projects:loadMessages", async (_e, payload: { projectId: string 
 
 async function generateChatTitle(firstMessage: string, firstResponse: string): Promise<string> {
   const prompt = `Generate a short, concise chat title (3-6 words, no quotes, no period, Title Case, PLAIN TEXT ONLY — no markdown, no # symbols, no bold) that summarizes this conversation. Return ONLY the title, nothing else.\n\nUser: ${firstMessage.slice(0, 800)}\n${firstResponse ? `Assistant: ${firstResponse.slice(0, 800)}` : ""}`;
-  const proModel = resolveModel("sunlight-2-pro");
+  const proModel = resolveModel(DEFAULT_MODEL);
   const apiKey = resolveModelKey(proModel.provider);
   if (!apiKey) throw new Error(`No API key for title generation. ${modelKeyHint(proModel.provider)}`);
   const isFree = isUsingFreeTier(undefined, proModel.provider);

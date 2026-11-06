@@ -2356,7 +2356,7 @@ async function sendCurrent() {
     if (text === "/help") {
       els.input.value = "";
       autoSizeInput();
-      addMsg("system", "/model [name] — switch model (sunlight-2, sunlight-2-pro)\n/reasoning [default|minimal|low|medium|high|xhigh] — set reasoning effort (current: " + effortLabel(currentReasoningEffort) + ")\n/clear — clear chat\n/help — show this" + (window.meteorExt?.helpLines?.() || ""));
+      addMsg("system", "/model [name] — switch model (sunlight-2.1)\n/reasoning [default|minimal|low|medium|high|xhigh] — set reasoning effort (current: " + effortLabel(currentReasoningEffort) + ")\n/clear — clear chat\n/help — show this" + (window.meteorExt?.helpLines?.() || ""));
       return;
     }
     if (text === "/model" || text.startsWith("/model ")) {
@@ -2365,7 +2365,7 @@ async function sendCurrent() {
       autoSizeInput();
       if (!target) {
         const cur = models.find((m) => m.key === currentModel);
-        addMsg("system", `Current: ${cur ? `${cur.name}${cur.key === "sunlight-2-pro" ? " (Unlimited)" : ""}` : currentModel} (${currentModel}) · reasoning: ${effortLabel(currentReasoningEffort)}. Available models: ${models.map((m) => `${m.key} (${m.name}${m.key === "sunlight-2-pro" ? " (Unlimited)" : ""})`).join(", ")} · reasoning: default, ${REASONING_EFFORTS.join(", ")}`);
+        addMsg("system", `Current: ${cur ? `${cur.name}${""}` : currentModel} (${currentModel}) · reasoning: ${effortLabel(currentReasoningEffort)}. Available models: ${models.map((m) => `${m.key} (${m.name}${""})`).join(", ")} · reasoning: default, ${REASONING_EFFORTS.join(", ")}`);
       } else {
         const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
         let f = models.find((m) => m.key.toLowerCase() === target.toLowerCase() || m.name.toLowerCase() === target.toLowerCase());
@@ -4056,13 +4056,13 @@ async function init() {
     }
   }
   models = info.models || [];
-  currentModel = info.defaultModel && models.find((m) => m.key === info.defaultModel) ? info.defaultModel : models[0]?.key || "sunlight-2-pro";
+  currentModel = info.defaultModel && models.find((m) => m.key === info.defaultModel) ? info.defaultModel : models[0]?.key || "sunlight-2.1";
 
   const savedChatModel = localStorage.getItem("meteor:chatModel");
   if (savedChatModel && models.find((m) => m.key === savedChatModel)) currentModel = savedChatModel;
   const renderModelOptions = () => {
     els.modelSelect.innerHTML = models.map((m) => {
-      const suffix = m.key === "sunlight-2-pro" ? " (Unlimited)" : "";
+      const suffix = "";
       return `<option value="${esc(m.key)}">${esc(m.name)}${suffix}</option>`;
     }).join("");
     els.modelSelect.value = currentModel;
@@ -4076,7 +4076,7 @@ async function init() {
     const prevM = models.find((x) => x.key === prev);
     if (m && prev !== currentModel) {
       const re = currentReasoningEffort ? ` · reasoning ${effortLabel(currentReasoningEffort)}` : "";
-      addMsg("system", `switched to ${m.name}${m.key === "sunlight-2-pro" ? " (Unlimited)" : ""}${prevM ? ` from ${prevM.name}` : ""}${re}`);
+      addMsg("system", `switched to ${m.name}${""}${prevM ? ` from ${prevM.name}` : ""}${re}`);
     }
   });
 
@@ -4126,7 +4126,7 @@ async function init() {
   const welcome = document.createElement("div");
   welcome.className = "msg assistant";
   welcome.style.display = "none";
-  welcome.innerHTML = `<div class="msg-head"><span style="color:var(--accent);display:inline-flex;vertical-align:middle"><svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="currentColor"/></svg></span> meteor</div><div class="msg-body tui-box">┌─ <span class="hl"><span style="display:inline-flex;vertical-align:middle"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.4 7.2H22l-6.2 4.5 2.4 7.3L12 16.5 5.8 21l2.4-7.3L2 9.2h7.6z"/></svg></span> meteor</span> <span class="fg">v${esc(info.version || "0.2.0")}</span> ──────────────────────┐\n│  AI coding assistant                                  │\n│  <span class="fg">Sunlight 2</span>  ·  <span class="fg">Sunlight 2 Pro</span>                           │\n└────────────────────────────────────────────┘\n\nAsk anything. Open a folder (<span class="fg">⌘⇧O</span>) and Meteor can read your whole codebase.\n<span class="fg">Build</span> writes files automatically (overwrites ask to apply) · <span class="fg">Plan</span> only previews — toggle at the top.</div>`;
+  welcome.innerHTML = `<div class="msg-head"><span style="color:var(--accent);display:inline-flex;vertical-align:middle"><svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="currentColor"/></svg></span> meteor</div><div class="msg-body tui-box">┌─ <span class="hl"><span style="display:inline-flex;vertical-align:middle"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.4 7.2H22l-6.2 4.5 2.4 7.3L12 16.5 5.8 21l2.4-7.3L2 9.2h7.6z"/></svg></span> meteor</span> <span class="fg">v${esc(info.version || "0.2.0")}</span> ──────────────────────┐\n│  AI coding assistant                                  │\n│  <span class="fg">Sunlight 2.1</span>                                          │\n└────────────────────────────────────────────┘\n\nAsk anything. Open a folder (<span class="fg">⌘⇧O</span>) and Meteor can read your whole codebase.\n<span class="fg">Build</span> writes files automatically (overwrites ask to apply) · <span class="fg">Plan</span> only previews — toggle at the top.</div>`;
   els.messages.append(welcome);
   // greeting time-of-day
   const greetingEl = document.getElementById("greeting");
