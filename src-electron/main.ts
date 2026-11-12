@@ -11,7 +11,8 @@ import { loadMcpServers, saveMcpServers, validateMcpServers, type McpServerConfi
 import { resolveApiKey, isUsingFreeTier, resolveModelKey, modelKeyHint } from "../src/config.js";
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, resetQuota, QuotaExceededError, formatTimeRemaining, FREE_TIER_TOKEN_LIMIT, type QuotaStatus } from "../src/quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "../src/web.js";
-import { scanWorkspace, writeFileInWorkspace } from "./workspace.js";
+import { deleteFileInWorkspace, scanWorkspace, writeFileInWorkspace } from "./workspace.js";
+import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_WRITE_TOOLS, executeWorkspaceTool } from "./workspace-tools.js";
 import { listChats, loadChat, saveChat, renameChat, deleteChat, deleteProjectChats } from "./chats.js";
 import { fetchRegistry, installExtension, listInstalled, uninstallExtension, validateManifest, describeManifest, parseManifestFile, extensionsDir, type ExtensionManifest } from "./extensions.js";
 import { authSignUp, authSignIn, authSignOut, authGetSession, authGetUser, isSupabaseConfigured, getProfileAvatar, getProfile, listProjects, createProject, getProject, updateProject, deleteProject, saveProjectMessages, loadProjectMessages, quotaGetServer, quotaRecordServer, quotaResetServer, type ServerQuotaState } from "./supabase.js";
@@ -225,7 +226,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 
 ipcMain.handle(
   "meteor:complete",
-  async (event, payload: { id: string; modelKey?: string; reasoningEffort?: string; messages: Message[]; apiKey?: string }) => {
+  async (event, payload: { id: string; modelKey?: string; reasoningEffort?: string; mode?: "plan" | "build"; messages: Message[]; apiKey?: string }) => {
     const { id } = payload;
     const send = (channel: string, data?: unknown) => {
       if (!event.sender.isDestroyed()) event.sender.send(`${channel}:${id}`, data);
@@ -299,7 +300,13 @@ ipcMain.handle(
       } catch (e) {
         send("meteor:tool_info", { count: 0, tools: [], error: e instanceof Error ? e.message : String(e) });
       }
-      const toolDefs = [...WEB_TOOL_DEFINITIONS, ...mcpTools];
+      const toolDefs = [
+        ...(workspaceRoot
+          ? WORKSPACE_TOOL_DEFINITIONS.filter((tool) => !(payload.mode === "plan" && WORKSPACE_WRITE_TOOLS.has(tool.name)))
+          : []),
+        ...WEB_TOOL_DEFINITIONS,
+        ...mcpTools,
+      ];
       let messages: any[] = [...payload.messages];
       let finalText = "";
       let finalReasoning = "";
@@ -333,7 +340,20 @@ ipcMain.handle(
           try {
             let text = "";
             let isError = false;
-            if (tc.server === "web" || tc.toolName === "fetch_url" || tc.toolName === "search_internet") {
+            let structured: unknown;
+            if (tc.server === "workspace") {
+              if (payload.mode === "plan" && WORKSPACE_WRITE_TOOLS.has(tc.toolName)) {
+                throw new Error(`${tc.toolName} is disabled in plan mode. Switch to Build to make changes.`);
+              }
+              const res = await withTimeout(
+                executeWorkspaceTool(tc.toolName, tc.parsedArgs ?? {}, workspaceRoot ?? ""),
+                60000,
+                `Workspace tool ${tc.toolName}`,
+              );
+              text = res.text;
+              structured = res.structured;
+              isError = !!res.isError;
+            } else if (tc.server === "web" || tc.toolName === "fetch_url" || tc.toolName === "search_internet") {
               text = await withTimeout(executeWebTool(tc.toolName, tc.parsedArgs), 30000, `Web tool ${tc.toolName}`);
               isError = text.startsWith("Error:") || text.startsWith("Failed to fetch");
             } else {
@@ -343,7 +363,7 @@ ipcMain.handle(
               isError = !!res.isError;
             }
             toolResults.push({ tool_call_id: tc.id, content: text });
-            send("meteor:tool_result", { id: tc.id, server: tc.server, tool: tc.toolName, result: text, isError });
+            send("meteor:tool_result", { id: tc.id, server: tc.server, tool: tc.toolName, result: text, structured, isError });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             toolResults.push({ tool_call_id: tc.id, content: `Error: ${msg}` });
@@ -440,6 +460,7 @@ ipcMain.handle("quota:reset", async () => {
 });
 
 let termCwd = process.cwd();
+let workspaceRoot: string | null = null;
 let currentTermProc: ChildProcessWithoutNullStreams | null = null;
 
 ipcMain.handle("workspace:open", async () => {
@@ -451,15 +472,31 @@ ipcMain.handle("workspace:open", async () => {
   if (result.canceled || result.filePaths.length === 0) return null;
   const scan = await scanWorkspace(result.filePaths[0]);
   termCwd = scan.root;
+  workspaceRoot = scan.root;
   return scan;
 });
 
-ipcMain.handle("workspace:refresh", (_e, root: string) => scanWorkspace(root));
+ipcMain.handle("workspace:refresh", async (_e, root: string) => {
+  const scan = await scanWorkspace(root);
+  termCwd = scan.root;
+  workspaceRoot = scan.root;
+  return scan;
+});
+
+ipcMain.handle("workspace:close", () => {
+  workspaceRoot = null;
+  return true;
+});
 
 ipcMain.handle(
   "workspace:writeFile",
   (_e, args: { root: string; relPath: string; content: string }) =>
     writeFileInWorkspace(args.root, args.relPath, args.content),
+);
+
+ipcMain.handle(
+  "workspace:deleteFile",
+  (_e, args: { root: string; relPath: string }) => deleteFileInWorkspace(args.root, args.relPath),
 );
 
 ipcMain.handle("dialog:openFile", async () => {

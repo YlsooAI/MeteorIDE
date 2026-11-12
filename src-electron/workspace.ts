@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export interface WorkspaceFile {
@@ -17,7 +17,7 @@ export interface WorkspaceScan {
   truncated: boolean;
 }
 
-const IGNORED_DIRS = new Set([
+export const IGNORED_DIRS = new Set([
   "node_modules",
   ".git",
   "dist",
@@ -45,7 +45,7 @@ const IGNORED_DIRS = new Set([
   ".terraform",
 ]);
 
-const LOCKFILES = new Set([
+export const LOCKFILES = new Set([
   "package-lock.json",
   "yarn.lock",
   "pnpm-lock.yaml",
@@ -134,5 +134,17 @@ export async function writeFileInWorkspace(
   }
   await mkdir(path.dirname(abs), { recursive: true });
   await writeFile(abs, content, "utf8");
+  return toRel(root, abs);
+}
+
+export async function deleteFileInWorkspace(rootInput: string, relPath: string): Promise<string> {
+  const root = path.resolve(rootInput);
+  const abs = path.resolve(root, relPath);
+  if (abs !== root && !abs.startsWith(root + path.sep)) {
+    throw new Error("Refusing to delete outside the workspace root");
+  }
+  const st = await lstat(abs);
+  if (!st.isFile() && !st.isSymbolicLink()) throw new Error(`Not a file: ${relPath}`);
+  await unlink(abs);
   return toRel(root, abs);
 }

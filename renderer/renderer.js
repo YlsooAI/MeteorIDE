@@ -56,9 +56,7 @@ let tabs = [];
 let activeTabId = null;
 let tabSeq = 0;
 
-const CONTEXT_BUDGET = 180000;
 const ACTIVE_FILE_CAP = 60000;
-const PER_FILE_CAP = 40000;
 
 let autoCreateEnabled = localStorage.getItem("meteor:autoCreate") !== "false";
 let buildMode = localStorage.getItem("meteor:buildMode") || "build";
@@ -454,6 +452,50 @@ Rules:
 - One block per file; use the exact relative path from the workspace root.
 - Only emit write: blocks for files that actually change; describe the rest in prose.
 - Use plain fenced blocks (with a language tag) only for snippets you are NOT writing to disk.`;
+
+const WORKSPACE_TOOLS_HEADER = `# Workspace tools
+You have direct access to the user's workspace through tools. Use them instead of guessing paths or asking the user to paste files:
+- list_files(path?, depth?, glob?): discover files and directories.
+- read_file(path, startLine?, endLine?): read a specific line range.
+- search(query, path?, glob?, literal?, caseSensitive?): find text or regex matches.
+- project_info(): project name, scripts, package manager and git status.`;
+
+const WORKSPACE_TOOLS_PROTOCOL = `${WORKSPACE_TOOLS_HEADER}
+- edit_file(path, oldText, newText, replaceAll?): replace one exact block of text. PREFERRED for a single small change.
+- apply_patch(patch, dryRun?): apply a unified diff or '*** Begin Patch' block. Use for multi-file changes, many hunks, or creating/deleting files.
+- move_file(from, to, overwrite?): rename or move a file.
+
+How to edit:
+1. Use search or list_files to locate the file, then read_file the relevant range.
+2. For one small change, call edit_file with oldText copied exactly from the file (including indentation and 2-3 surrounding lines) and the replacement as newText.
+3. For several changes or several files, send one apply_patch section per file:
+
+\`\`\`
+--- a/src/file.ts
++++ b/src/file.ts
+@@ -12,7 +12,8 @@
+ context line
+-old line
++new line
+ context line
+\`\`\`
+
+Rules:
+- In edit_file, oldText must appear exactly once unless replaceAll is true.
+- In apply_patch, include about 3 unchanged context lines around every change.
+- Use exact workspace-relative paths (no leading slash, no absolute paths).
+- Do not emit write: blocks while workspace tools are available.
+- If a tool reports a mismatch, read the file again and regenerate — never guess.
+- Use move_file for renames; do not delete and recreate a file just to move it.
+- Only change files the task requires. Do not rewrite whole files for small edits.`;
+
+const WORKSPACE_TOOLS_PROTOCOL_PLAN = `${WORKSPACE_TOOLS_HEADER}
+
+Read-only investigation:
+1. Use search or list_files to locate the relevant files.
+2. Use read_file to inspect the exact ranges you need.
+3. Use project_info when you need scripts or git state.
+4. Present the plan and show proposed changes as plain \`\`\`diff fences. Do not modify files — the user will switch to Build to apply them.`;
 
 const TERMINAL_PROTOCOL = `# Terminal commands
 To run a terminal command, output ONE fenced block per command:
@@ -986,8 +1028,8 @@ function diffLineEl(op) {
 }
 
 let undoStack = [];
-function pushUndo(path, oldContent) {
-  undoStack.push({ path, oldContent, at: Date.now() });
+function pushUndo(path, oldContent, extra = {}) {
+  undoStack.push({ path, oldContent, ...extra, at: Date.now() });
   if (undoStack.length > 50) undoStack.shift();
   updateUndoUI();
 }
@@ -1004,6 +1046,14 @@ async function undoLast() {
   const last = undoStack.pop();
   if (!last || !workspace) { updateUndoUI(); return; }
   try {
+    if (last.deletePath) {
+      try {
+        await window.meteorAPI.deleteWorkspaceFile({ root: workspace.root, relPath: last.deletePath });
+      } catch {}
+      workspace.files.delete(last.deletePath);
+      const moved = tabs.find((x) => x.rel === last.deletePath);
+      if (moved) closeTab(moved.id, true);
+    }
     await window.meteorAPI.writeWorkspaceFile({ root: workspace.root, relPath: last.path, content: last.oldContent });
     workspace.files.set(last.path, { path: last.path, content: last.oldContent, size: last.oldContent.length });
     renderTree();
@@ -1057,7 +1107,7 @@ async function openWorkspace() {
   setWorkspace(scan);
 }
 
-function setWorkspace(scan) {
+function setWorkspace(scan, opts = {}) {
   workspace = {
     root: scan.root,
     name: scan.name,
@@ -1071,7 +1121,7 @@ function setWorkspace(scan) {
   const ccName = document.getElementById("cc-project-name");
   if (ccName) ccName.textContent = workspace.name || "MeteorCLI";
   renderTree();
-  setBusy(false);
+  if (!opts.keepBusy) setBusy(false);
   termCwd = scan.root;
   termUpdatePrompt();
   refreshGitStatus();
@@ -1079,32 +1129,44 @@ function setWorkspace(scan) {
   updateCenterVisibility();
 }
 
-async function refreshWorkspace() {
+async function refreshWorkspace(opts = {}) {
   if (!workspace) return;
-  const scan = await window.meteorAPI.refreshWorkspace(workspace.root);
-  const wasActive = activeTab();
-  setWorkspace(scan);
-  // Reload the open tab's content if the tab has no unsaved edits.
-  if (wasActive?.rel && workspace.files.has(wasActive.rel)) {
-    const t = activeTab();
-    if (t && t.buffer === t.savedContent) {
-      const f = workspace.files.get(t.rel);
-      t.buffer = f.content ?? "";
-      t.savedContent = t.buffer;
-      els.editor.value = t.buffer;
-      savedContent = t.buffer;
+  const root = workspace.root;
+  const scan = await window.meteorAPI.refreshWorkspace(root);
+  setWorkspace(scan, { keepBusy: busy });
+  // Refresh every clean open tab (unsaved buffers are left alone).
+  for (const t of tabs) {
+    if (!t.rel || !workspace.files.has(t.rel)) continue;
+    if (t.buffer !== t.savedContent) continue;
+    const next = workspace.files.get(t.rel).content ?? "";
+    if (next === t.savedContent) continue;
+    t.buffer = next;
+    t.savedContent = next;
+    if (t.id === activeTabId) {
+      els.editor.value = next;
+      savedContent = next;
       setDirty(false);
       updateHighlight();
       updateCursorPos();
     }
   }
-  addMsg("system", `↻ rescanned workspace · ${workspace.files.size} files`);
+  if (opts.notify !== false) addMsg("system", `↻ rescanned workspace · ${workspace.files.size} files`);
+}
+
+let workspaceRefreshTimer = null;
+function scheduleWorkspaceRefresh() {
+  if (workspaceRefreshTimer) return;
+  workspaceRefreshTimer = setTimeout(() => {
+    workspaceRefreshTimer = null;
+    refreshWorkspace({ notify: false }).catch(() => {});
+  }, 250);
 }
 
 function closeWorkspace() {
   if (!workspace) return;
   const dirtyRels = tabs.filter((t) => t.rel && t.buffer !== t.savedContent);
   if (dirtyRels.length > 0 && !confirm(`Discard unsaved edits in ${dirtyRels.length} workspace file(s)?`)) return;
+  window.meteorAPI.closeWorkspace?.();
   workspace = null;
   collapsedDirs.clear();
   els.sidebar.classList.add("hidden");
@@ -1637,48 +1699,30 @@ function workspaceTreeText() {
 }
 
 function workspaceContext() {
-  const listing = [];
-  for (const f of workspace.files.values()) {
-    listing.push(f.content === null ? `${f.path}  (${f.skipReason})` : `${f.path}  (${f.size} chars)`);
-  }
-  let out = `# Workspace\nRoot: ${workspace.root}\nFiles (${workspace.files.size}):\n${listing.join("\n")}\n`;
-  if (workspace.truncated) out += "(scan truncated — some directories may be missing)\n";
-  out += `\n# Project tree (compact map — use it to locate files)\n${workspaceTreeText()}\n`;
+  let out = `# Workspace\nRoot: ${workspace.root}\nFiles: ${workspace.files.size}${workspace.truncated ? " (scan truncated)" : ""}\n`;
+  out += `\n# Project tree (compact map — use list_files or search to inspect anything not shown)\n${workspaceTreeText()}\n`;
+  if (workspace.truncated) out += "\n(scan truncated — some directories may be missing; use list_files to inspect them)\n";
 
-  let budget = CONTEXT_BUDGET - out.length;
-  out += "\n# File contents (open editor tabs first, then smallest files)\n";
+  // Tools read from disk, so the only file contents the model cannot get on its
+  // own are unsaved editor buffers. Include those verbatim.
   const override = activeFileOverride();
-  // open tabs (unsaved edits included) get priority after the active override
-  const openPaths = new Set();
-  const openFiles = [];
+  const seen = new Set();
+  const buffers = [];
+  if (override) {
+    buffers.push(override);
+    seen.add(override.path);
+  }
   for (const t of tabs) {
-    if (!t.rel || openPaths.has(t.rel)) continue;
-    const c = tabContent(t.rel);
-    if (c == null) continue;
-    openPaths.add(t.rel);
-    if (override && t.rel === override.path) continue;
-    openFiles.push({ path: t.rel, content: c });
+    if (!t.rel || seen.has(t.rel) || t.buffer === t.savedContent) continue;
+    seen.add(t.rel);
+    buffers.push({ path: t.rel, content: t.buffer });
   }
-  const ordered = [];
-  if (override) ordered.push(override);
-  for (const f of openFiles) ordered.push(f);
-  const rest = [...workspace.files.values()]
-    .filter((f) => f.content !== null && f.path !== override?.path && !openPaths.has(f.path))
-    .sort((a, b) => a.size - b.size);
-  for (const f of rest) ordered.push(f);
-
-  let omitted = 0;
-  for (const f of ordered) {
-    const cap = f === override ? ACTIVE_FILE_CAP : PER_FILE_CAP;
-    const body = clip(f.content ?? "", cap, f.path);
-    if (body.length + f.path.length + 16 > budget) {
-      omitted += 1;
-      continue;
+  if (buffers.length) {
+    out += "\n# Unsaved editor buffers (not on disk yet — tools read from disk, so re-read a file before patching it)\n";
+    for (const b of buffers) {
+      out += `\n=== ${b.path} ===\n${clip(b.content ?? "", ACTIVE_FILE_CAP, b.path)}\n`;
     }
-    budget -= body.length + f.path.length + 16;
-    out += `\n=== ${f.path} ===\n${body}\n`;
   }
-  if (omitted > 0) out += `\n(${omitted} more files exist but were omitted to fit the context budget)\n`;
   return out;
 }
 
@@ -1696,14 +1740,16 @@ function buildSystemMessage() {
 
 function buildSystemMessageBase() {
   const modeNote = buildMode === "plan"
-    ? "\n\n# Mode: PLAN — do NOT write files. Describe the build plan, list each file that would be created/modified with its path, and show snippets with normal ``` fences (not write:). The user will switch to Build to actually write."
-    : "\n\n# Mode: BUILD — you may write files using write: blocks. New files will be created automatically, overwrites will ask for confirmation.";
-  const withTerminal = `${EDIT_PROTOCOL}\n\n${TERMINAL_PROTOCOL}`;
-  const contextNote = "\n\n# Codebase awareness\n- The Workspace section lists the project tree and file contents (truncated to a budget; open editor tabs come first).\n- A user message may start with an \"# Attached files\" block — files the user explicitly referenced with @. Treat those as the primary context and prefer editing them over guessing paths.";
-  if (workspace) return `${BASE_PROMPT}${modeNote}\n\n${WEB_PROTOCOL}\n\n${withTerminal}${contextNote}\n\n${workspaceContext()}\n\n${terminalContext()}`;
+    ? "\n\n# Mode: PLAN — read-only. You may use list_files, read_file and search to investigate, but do NOT call apply_patch and do NOT write files. Describe the plan, name each file that would change, and show the proposed diffs as plain ```diff fences. The user will switch to Build to apply them."
+    : "\n\n# Mode: BUILD — you may call apply_patch to create or modify files. New files are created automatically; changes are applied only when the patch matches the current file.";
+  const contextNote = "\n\n# Codebase awareness\n- The Workspace section gives the root, a compact tree and any unsaved editor buffers. Use list_files, read_file and search to get file contents instead of assuming them.\n- A user message may start with an \"# Attached files\" block — files the user explicitly referenced with @. Treat those as primary context and read them before editing.";
+  if (workspace) {
+    const tools = buildMode === "plan" ? WORKSPACE_TOOLS_PROTOCOL_PLAN : WORKSPACE_TOOLS_PROTOCOL;
+    return `${BASE_PROMPT}${modeNote}\n\n${tools}\n\n${WEB_PROTOCOL}\n\n${TERMINAL_PROTOCOL}${contextNote}\n\n${workspaceContext()}\n\n${terminalContext()}`;
+  }
   const single = singleFileContext();
-  if (single) return `${BASE_PROMPT}${modeNote}\n\n${WEB_PROTOCOL}\n\n${TERMINAL_PROTOCOL}${contextNote}\n\n${single}\n\n${terminalContext()}`;
-  return `${BASE_PROMPT}${modeNote}\n\n${WEB_PROTOCOL}\n\n${TERMINAL_PROTOCOL}\n\n${terminalContext()}`;
+  if (single) return `${BASE_PROMPT}${modeNote}\n\n${WEB_PROTOCOL}\n\n${EDIT_PROTOCOL}\n\n${TERMINAL_PROTOCOL}${contextNote}\n\n${single}\n\n${terminalContext()}`;
+  return `${BASE_PROMPT}${modeNote}\n\n${WEB_PROTOCOL}\n\n${EDIT_PROTOCOL}\n\n${TERMINAL_PROTOCOL}\n\n${terminalContext()}`;
 }
 
 /* ---------------- AI file edits ---------------- */
@@ -2100,6 +2146,8 @@ const TOOL_ICONS = {
   search: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>`,
   globe: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/></svg>`,
   tool: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg>`,
+  edit: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>`,
+  file: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M13 2v7h7"/></svg>`,
   check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`,
   alert: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg>`,
   chev: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>`,
@@ -2116,8 +2164,104 @@ function describeToolCall(call, args) {
     try { const u = new URL(String(args.url || "")); host = u.hostname.replace(/^www\./, ""); path = (u.pathname + u.search).replace(/\/$/, ""); } catch { host = String(args.url || "page"); }
     return { icon: "globe", running: `Reading ${host}`, done: `Read ${host}`, failed: `Couldn't read ${host}`, detail: path, href: String(args.url || "") };
   }
+  if (call.server === "workspace" || String(call.name || "").startsWith("workspace__")) {
+    const p = String(args.path || args.file_path || args.file || "");
+    if (tool === "list_files") {
+      return { icon: "file", running: "Listing files", done: "Listed files", failed: "Couldn't list files", detail: p || "workspace root" };
+    }
+    if (tool === "read_file") {
+      const start = args.startLine ?? args.start_line ?? args.start;
+      const end = args.endLine ?? args.end_line ?? args.end;
+      const range = start ? `:${start}${end ? `-${end}` : ""}` : "";
+      return { icon: "file", running: `Reading ${p}`, done: `Read ${p}`, failed: `Couldn't read ${p}`, detail: range };
+    }
+    if (tool === "search") {
+      const q = String(args.query || args.q || "").trim();
+      return { icon: "search", running: "Searching workspace", done: "Searched workspace", failed: "Workspace search failed", detail: q ? `“${q}”` : "" };
+    }
+    if (tool === "project_info") {
+      return { icon: "tool", running: "Inspecting project", done: "Inspected project", failed: "Couldn't inspect project", detail: String(args.path || "") };
+    }
+    if (tool === "edit_file") {
+      const oldText = String(args.oldText || args.old_text || args.old_string || "").trim();
+      const snippet = oldText.split("\n")[0].slice(0, 60);
+      return { icon: "edit", running: `Editing ${p}`, done: `Edited ${p}`, failed: `Couldn't edit ${p}`, detail: snippet };
+    }
+    if (tool === "move_file") {
+      const from = String(args.from || args.path || "");
+      const to = String(args.to || args.newPath || args.new_path || "");
+      return { icon: "edit", running: `Moving ${from}`, done: `Moved ${from}`, failed: `Couldn't move ${from}`, detail: to ? `→ ${to}` : "" };
+    }
+    if (tool === "apply_patch") {
+      const patch = String(args.patch || args.diff || "");
+      const paths = [...patch.matchAll(/^\+\+\+\s+(?:b\/)?([^\t\n]+)/gm)]
+        .map((m) => m[1].trim())
+        .filter((x) => x && x !== "/dev/null");
+      const detail = paths.length ? paths.slice(0, 3).join(", ") + (paths.length > 3 ? ` +${paths.length - 3}` : "") : "";
+      return { icon: "edit", running: "Applying patch", done: "Applied patch", failed: "Patch rejected", detail };
+    }
+  }
   const label = String(tool).replace(/[_-]+/g, " ");
   return { icon: "tool", running: `Running ${label}`, done: `Ran ${label}`, failed: `${label} failed`, detail: call.server && call.server !== "mcp" ? call.server : "" };
+}
+
+function buildDiffPreview(text, maxLines = 240) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const wrap = document.createElement("div");
+  wrap.className = "tool-diff";
+  const shown = lines.slice(0, maxLines);
+  shown.forEach((line, index) => {
+    if (index === shown.length - 1 && line === "") return;
+    const row = document.createElement("div");
+    let cls = "ctx";
+    if (/^(\+\+\+|---|\*\*\*|diff --git|index )/.test(line)) cls = "meta";
+    else if (line.startsWith("@@")) cls = "hunk";
+    else if (line.startsWith("+")) cls = "add";
+    else if (line.startsWith("-")) cls = "del";
+    row.className = `tool-diff-line ${cls}`;
+    row.textContent = line || " ";
+    wrap.append(row);
+  });
+  if (lines.length > shown.length) {
+    const more = document.createElement("div");
+    more.className = "tool-diff-line meta";
+    more.textContent = `… ${lines.length - shown.length} more lines`;
+    wrap.append(more);
+  }
+  return wrap;
+}
+
+function buildEditPreview(oldText, newText) {
+  const wrap = document.createElement("div");
+  wrap.className = "tool-diff";
+  const add = (text, cls, max) => {
+    const lines = String(text || "").replace(/\r\n/g, "\n").split("\n").slice(0, max);
+    for (const line of lines) {
+      const row = document.createElement("div");
+      row.className = `tool-diff-line ${cls}`;
+      row.textContent = `${cls === "del" ? "-" : "+"}${line}`;
+      wrap.append(row);
+    }
+  };
+  add(oldText, "del", 80);
+  add(newText, "add", 80);
+  return wrap;
+}
+
+function buildToolPreview(call, args) {
+  const tool = call.tool || "";
+  const isWorkspace = call.server === "workspace" || String(call.name || "").startsWith("workspace__");
+  if (!isWorkspace) return null;
+  if (tool === "apply_patch") {
+    const patch = String(args.patch || args.diff || args.input || "");
+    return patch ? buildDiffPreview(patch) : null;
+  }
+  if (tool === "edit_file") {
+    const oldText = String(args.oldText || args.old_text || args.old_string || args.find || "");
+    const newText = String(args.newText || args.new_text || args.new_string || args.replace || "");
+    return oldText || newText ? buildEditPreview(oldText, newText) : null;
+  }
+  return null;
 }
 
 function buildMcpToolBlock(call) {
@@ -2145,18 +2289,24 @@ function buildMcpToolBlock(call) {
 
   const body = document.createElement("div");
   body.className = "tool-body hidden";
-  const argLine = document.createElement("div");
-  argLine.className = "tool-args";
-  if (d.href) {
-    argLine.textContent = d.href;
+  const preview = buildToolPreview(call, args);
+  if (preview) {
+    body.append(preview);
   } else {
-    const entries = Object.entries(args || {});
-    argLine.textContent = entries.length ? entries.map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("\n") : "";
+    const argLine = document.createElement("div");
+    argLine.className = "tool-args";
+    if (d.href) {
+      argLine.textContent = d.href;
+    } else {
+      const entries = Object.entries(args || {});
+      argLine.textContent = entries.length ? entries.map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("\n") : "";
+    }
+    body.append(argLine);
   }
   const out = document.createElement("pre");
   out.className = "tool-out";
   out.textContent = "Waiting for result…";
-  body.append(argLine, out);
+  body.append(out);
 
   head.addEventListener("click", () => {
     const open = body.classList.toggle("hidden") === false;
@@ -2170,7 +2320,127 @@ function buildMcpToolBlock(call) {
   return row;
 }
 
-function updateMcpToolResult(row, result, isError) {
+function toolSummaryLine(text, className) {
+  const el = document.createElement("div");
+  el.className = "tool-summary-line" + (className ? " " + className : "");
+  el.textContent = text;
+  return el;
+}
+
+function toolFileButton(path, label) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tool-file-path";
+  btn.textContent = label || path;
+  btn.title = `Open ${path}`;
+  btn.addEventListener("click", () => {
+    if (!workspace || !workspace.files.has(path)) return;
+    openWorkspaceFile(path);
+  });
+  return btn;
+}
+
+function buildToolSummary(structured) {
+  if (!structured || typeof structured !== "object") return null;
+  if (structured.ok === false) {
+    return toolSummaryLine(String(structured.error || "Tool failed"), "error");
+  }
+  const wrap = document.createElement("div");
+  wrap.className = "tool-summary";
+
+  // apply_patch -> one row per changed file
+  if (Array.isArray(structured.files)) {
+    for (const f of structured.files) {
+      const row = document.createElement("div");
+      row.className = "tool-file";
+      const badge = document.createElement("span");
+      badge.className = `tool-file-action ${f.action || "update"}`;
+      badge.textContent = f.action === "create" ? "A" : f.action === "delete" ? "D" : f.action === "move" ? "R" : "M";
+      badge.title = f.action || "update";
+      const stat = document.createElement("span");
+      stat.className = "tool-file-stat";
+      if (f.added) {
+        const s = document.createElement("span");
+        s.className = "add";
+        s.textContent = `+${f.added}`;
+        stat.append(s);
+      }
+      if (f.removed) {
+        const s = document.createElement("span");
+        s.className = "del";
+        s.textContent = `−${f.removed}`;
+        stat.append(s);
+      }
+      row.append(badge, toolFileButton(f.path, f.from ? `${f.from} → ${f.path}` : f.path), stat);
+      wrap.append(row);
+    }
+    return wrap;
+  }
+
+  // search -> match count and clickable file:line rows
+  if (Array.isArray(structured.matches)) {
+    const count = structured.matches.length;
+    wrap.append(toolSummaryLine(`${count} match${count === 1 ? "" : "es"}${structured.truncated ? " (truncated)" : ""}`));
+    for (const m of structured.matches.slice(0, 10)) {
+      const row = document.createElement("div");
+      row.className = "tool-match";
+      const text = document.createElement("span");
+      text.className = "tool-match-text";
+      text.textContent = String(m.text || "").trim();
+      text.title = String(m.text || "");
+      row.append(toolFileButton(m.path, `${m.path}:${m.line}`), text);
+      wrap.append(row);
+    }
+    if (count > 10) wrap.append(toolSummaryLine(`… and ${count - 10} more`));
+    return wrap;
+  }
+
+  // list_files -> directory summary
+  if (Array.isArray(structured.entries)) {
+    const dirs = structured.entries.filter((e) => e.type === "dir").length;
+    const files = structured.entries.length - dirs;
+    wrap.append(toolSummaryLine(
+      `${files} file${files === 1 ? "" : "s"}, ${dirs} director${dirs === 1 ? "y" : "ies"}${structured.truncated ? " (truncated)" : ""}`,
+    ));
+    return wrap;
+  }
+
+  // project_info -> package, git and scripts
+  if (Array.isArray(structured.topLevel)) {
+    const pkg = structured.package || {};
+    const git = structured.git;
+    const head = [pkg.name, pkg.version ? `v${pkg.version}` : "", structured.packageManager].filter(Boolean).join(" ");
+    wrap.append(toolSummaryLine(head || String(structured.name || structured.root || "project")));
+    if (git) {
+      wrap.append(toolSummaryLine(`branch ${git.branch} · ${git.dirty ? `${git.dirty} changed file${git.dirty === 1 ? "" : "s"}` : "clean"}`));
+    }
+    const scripts = pkg.scripts && typeof pkg.scripts === "object" ? Object.keys(pkg.scripts) : [];
+    if (scripts.length) {
+      wrap.append(toolSummaryLine(`scripts: ${scripts.slice(0, 10).join(", ")}${scripts.length > 10 ? "…" : ""}`));
+    }
+    const dirs = structured.topLevel.slice(0, 12).map((e) => e.name + (e.type === "dir" ? "/" : ""));
+    if (dirs.length) wrap.append(toolSummaryLine(dirs.join("  ")));
+    return wrap;
+  }
+
+  // read_file -> path + range
+  if (structured.path !== undefined && structured.totalLines !== undefined) {
+    const line = document.createElement("div");
+    line.className = "tool-summary-line";
+    line.append(toolFileButton(structured.path, structured.path));
+    const meta = document.createElement("span");
+    meta.textContent = structured.totalLines > 0
+      ? ` · lines ${structured.startLine}–${structured.endLine} of ${structured.totalLines}${structured.truncated ? " (request more with startLine/endLine)" : ""}`
+      : " · empty file";
+    line.append(meta);
+    wrap.append(line);
+    return wrap;
+  }
+
+  return null;
+}
+
+function updateMcpToolResult(row, result, isError, structured) {
   if (!row) return;
   const d = row._desc || {};
   row.dataset.state = isError ? "error" : "done";
@@ -2181,6 +2451,46 @@ function updateMcpToolResult(row, result, isError) {
   if (row._out) {
     const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
     row._out.textContent = (text || "No output").slice(0, 8000).trim() || "No output";
+  }
+
+  const summary = buildToolSummary(structured);
+  if (summary) {
+    const body = row.querySelector(".tool-body");
+    if (body && row._out && row._out.parentElement === body) body.insertBefore(summary, row._out);
+    else if (body) body.append(summary);
+    // Successful edits deserve to be visible immediately, and the tree/editor
+    // should reflect what just changed on disk.
+    if (structured && Array.isArray(structured.files)) {
+      if (body) body.classList.remove("hidden");
+      row.classList.add("open");
+      const head = row.querySelector(".tool-row-head");
+      if (head) head.setAttribute("aria-expanded", "true");
+      if (!structured.dryRun && !row._undoPushed) {
+        row._undoPushed = true;
+        // Tool results carry the pre-edit content so Ctrl+Z can restore it.
+        for (const f of structured.files) {
+          if ((f.action === "update" || f.action === "delete") && typeof f.before === "string") {
+            pushUndo(f.path, f.before);
+          } else if (f.action === "move" && typeof f.before === "string" && f.from) {
+            pushUndo(f.from, f.before, { deletePath: f.path });
+          }
+        }
+      }
+      if (!structured.dryRun) {
+        let retargeted = false;
+        for (const f of structured.files) {
+          if (f.action !== "move" || !f.from) continue;
+          const tab = tabs.find((t) => t.rel === f.from);
+          if (tab) {
+            tab.rel = f.path;
+            tab.name = f.path.split("/").pop();
+            retargeted = true;
+          }
+        }
+        if (retargeted) renderTabs();
+        scheduleWorkspaceRefresh();
+      }
+    }
   }
 }
 
@@ -2541,13 +2851,13 @@ async function sendCurrent() {
   const onToolResultUI = (res) => {
     bump();
     const b = toolBlocks.get(res.id) || [...toolBlocks.values()].slice(-1)[0];
-    if (b) updateMcpToolResult(b, res.result, !!res.isError);
+    if (b) updateMcpToolResult(b, res.result, !!res.isError, res.structured);
     // also log to terminal history for context
     pushTerminalLog(`${res.server || "mcp"}:${res.tool || ""}`, typeof res.result === "string" ? res.result : JSON.stringify(res.result), res.isError ? 1 : 0);
   };
   setBusy(true);
   const stop = window.meteorAPI.stream(
-    { modelKey: currentModel, reasoningEffort: currentReasoningEffort, messages: [{ role: "system", content: buildSystemMessage() }, ...chatHistory.map((m, i, all) => expandMessageForApi(m, i === all.length - 1))] },
+    { modelKey: currentModel, reasoningEffort: currentReasoningEffort, mode: buildMode, messages: [{ role: "system", content: buildSystemMessage() }, ...chatHistory.map((m, i, all) => expandMessageForApi(m, i === all.length - 1))] },
     {
       onChunk: (delta) => {
         bump();
