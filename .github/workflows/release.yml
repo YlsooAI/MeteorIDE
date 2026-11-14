@@ -1,0 +1,70 @@
+name: Windows release
+
+# Publishes a GitHub Release for the version in package.json.
+# Runs on demand and on pushes to main; the publish step is skipped when the
+# release for the current version already exists, so it is safe to re-run.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "value=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether this version is already released
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.value }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "v${{ steps.version.outputs.value }} already has a release — skipping."
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.released == 'false'
+        run: npm ci
+
+      - name: Build
+        if: steps.check.outputs.released == 'false'
+        run: npm run build
+
+      - name: Package Windows installer
+        if: steps.check.outputs.released == 'false'
+        run: npx electron-builder --win nsis zip --x64 --publish never
+
+      - name: Publish GitHub release
+        if: steps.check.outputs.released == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.version.outputs.value }}" \
+            "release/Meteor Setup ${{ steps.version.outputs.value }}.exe" \
+            release/Meteor-*win*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Meteor ${{ steps.version.outputs.value }}" \
+            --generate-notes \
+            --latest
