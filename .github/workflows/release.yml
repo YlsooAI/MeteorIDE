@@ -1,8 +1,14 @@
 name: Windows release
 
-# Publishes a GitHub Release for the version in package.json.
-# Runs on demand and on pushes to main; the publish step is skipped when the
-# release for the current version already exists, so it is safe to re-run.
+# Builds the Windows NSIS installer (the asset the in-app updater downloads) and
+# a portable zip, then attaches them to the GitHub release for the version in
+# package.json.
+#
+# - release missing  -> create it for tag v<version>
+# - release present but has no .exe -> upload the Windows assets to it
+# - release present with an .exe    -> nothing to do
+#
+# Safe to re-run: no build or upload happens once the Windows asset exists.
 
 on:
   push:
@@ -30,40 +36,57 @@ jobs:
         shell: bash
         run: echo "value=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: Check whether this version is already released
-        id: check
+      - name: Inspect existing release
+        id: state
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "v${{ steps.version.outputs.value }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "released=true" >> "$GITHUB_OUTPUT"
-            echo "v${{ steps.version.outputs.value }} already has a release — skipping."
+          tag="v${{ steps.version.outputs.value }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > assets.txt 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            : > assets.txt
+          fi
+          if grep -qi '\.exe$' assets.txt; then
+            echo "has_exe=true" >> "$GITHUB_OUTPUT"
+            echo "$tag already ships a Windows installer — nothing to do."
+          else
+            echo "has_exe=false" >> "$GITHUB_OUTPUT"
+            echo "Windows asset missing for $tag — will build and upload."
           fi
 
       - name: Install dependencies
-        if: steps.check.outputs.released == 'false'
+        if: steps.state.outputs.has_exe == 'false'
         run: npm ci
 
       - name: Build
-        if: steps.check.outputs.released == 'false'
+        if: steps.state.outputs.has_exe == 'false'
         run: npm run build
 
       - name: Package Windows installer
-        if: steps.check.outputs.released == 'false'
+        if: steps.state.outputs.has_exe == 'false'
         run: npx electron-builder --win nsis zip --x64 --publish never
 
-      - name: Publish GitHub release
-        if: steps.check.outputs.released == 'false'
+      - name: Attach Windows assets to the existing release
+        if: steps.state.outputs.has_exe == 'false' && steps.state.outputs.exists == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "v${{ steps.version.outputs.value }}" \
+            release/*.exe release/*.zip \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Create the release with Windows assets
+        if: steps.state.outputs.has_exe == 'false' && steps.state.outputs.exists == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "v${{ steps.version.outputs.value }}" \
-            "release/Meteor Setup ${{ steps.version.outputs.value }}.exe" \
-            release/Meteor-*win*.zip \
+            release/*.exe release/*.zip \
             --repo "$GITHUB_REPOSITORY" \
             --title "Meteor ${{ steps.version.outputs.value }}" \
             --generate-notes \
