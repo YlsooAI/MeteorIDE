@@ -1,8 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
-import { app } from "electron";
-import { loadMcpServers, type McpServerConfig } from "../src/config.js";
+import { loadMcpServers, type McpServerConfig } from "./config.js";
+
+let mcpClientVersion = "0.2.25";
+export function setMcpClientVersion(version: string): void {
+  if (version) mcpClientVersion = version;
+}
 
 export interface McpTool {
   name: string;
@@ -126,7 +130,7 @@ class StdioMcpConnection {
       await this.request("initialize", {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "meteor", version: app.getVersion() },
+        clientInfo: { name: "meteor", version: mcpClientVersion },
       }, 8000);
     } catch (e) {
       // handshake failed — kill so we don't reuse a wedged process

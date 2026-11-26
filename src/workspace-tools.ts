@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { lstat, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ToolDefinition } from "../src/zen.js";
+import type { ToolDefinition } from "./zen.js";
 import { IGNORED_DIRS, LOCKFILES } from "./workspace.js";
 
 /**
@@ -137,10 +137,65 @@ export const WORKSPACE_TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["from", "to"],
     },
   },
+  {
+    server: "workspace",
+    name: "git_status",
+    description:
+      "Show the workspace's git branch, upstream tracking status, and changed/untracked files. Read-only and safe in both Plan and Build modes.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    server: "workspace",
+    name: "git_diff",
+    description:
+      "Show the unified git diff for the workspace or a specific file. Set staged: true to inspect staged changes. Read-only and safe in both Plan and Build modes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Optional workspace-relative file or directory path to diff." },
+        staged: { type: "boolean", description: "Inspect staged (--cached) changes instead of unstaged changes (default false)." },
+        maxLines: { type: "number", description: "Maximum diff lines to return (default 300, max 1000)." },
+      },
+    },
+  },
+  {
+    server: "workspace",
+    name: "git_log",
+    description:
+      "Show recent git commits (hash, author, date, subject) for the workspace or a specific file. Read-only and safe in both Plan and Build modes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Number of commits to return (default 15, max 50)." },
+        path: { type: "string", description: "Optional workspace-relative file or directory path to filter commits." },
+      },
+    },
+  },
+  {
+    server: "workspace",
+    name: "run_command",
+    description:
+      "Run a shell command in the workspace (for example to run tests, typecheck, build, or linters). Requires user approval before execution. Output is captured and truncated if very large.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Shell command to execute, e.g. 'npm run typecheck' or 'npm test'." },
+        cwd: { type: "string", description: "Optional working directory relative to the workspace root." },
+        timeoutMs: { type: "number", description: "Timeout in milliseconds (default 30000, max 120000)." },
+      },
+      required: ["command"],
+    },
+  },
 ];
 
 /** Tools that can modify the workspace; hidden and rejected in plan mode. */
-export const WORKSPACE_WRITE_TOOLS = new Set(["edit_file", "apply_patch", "move_file"]);
+export const WORKSPACE_WRITE_TOOLS = new Set(["edit_file", "apply_patch", "move_file", "run_command"]);
+
+/** Tools that require explicit user approval before execution. */
+export const WORKSPACE_APPROVAL_TOOLS = new Set(["run_command"]);
 
 function str(v: unknown): string {
   return typeof v === "string" ? v : v === undefined || v === null ? "" : String(v);
@@ -1173,6 +1228,236 @@ async function moveFileTool(root: string, args: Args): Promise<WorkspaceToolResu
   return { text: json(data), structured: { ...data, files: [structuredChange] } };
 }
 
+/* ── git_status / git_diff / git_log ────────────────────────────────── */
+
+function execGit(root: string, args: string[], timeout = 10000): Promise<{ ok: boolean; stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd: root, timeout, maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
+      const code = err && typeof (err as NodeJS.ErrnoException & { code?: number }).code === "number"
+        ? ((err as unknown as { code: number }).code)
+        : err ? 1 : 0;
+      resolve({
+        ok: !err,
+        stdout: stdout ? stdout.toString() : "",
+        stderr: stderr ? stderr.toString() : (err ? err.message : ""),
+        code,
+      });
+    });
+  });
+}
+
+async function gitStatusTool(root: string): Promise<WorkspaceToolResult> {
+  const res = await execGit(root, ["status", "--porcelain=v1", "-b"]);
+  if (!res.ok) {
+    const msg = res.stderr.trim() || "Not a git repository";
+    return { text: `Error: ${msg}`, isError: true, structured: { ok: false, kind: "git_status", error: msg } };
+  }
+  const lines = res.stdout.replace(/\r\n/g, "\n").split("\n").filter(Boolean);
+  let branch = "";
+  let tracking: string | null = null;
+  let ahead = 0;
+  let behind = 0;
+  const files: Array<{ status: string; staged: string; unstaged: string; path: string }> = [];
+
+  for (const line of lines) {
+    if (line.startsWith("## ")) {
+      const head = line.slice(3).trim();
+      const bracketMatch = head.match(/\[([^\]]+)\]\s*$/);
+      const mainPart = bracketMatch ? head.slice(0, bracketMatch.index).trim() : head;
+      const dots = mainPart.indexOf("...");
+      if (dots !== -1) {
+        branch = mainPart.slice(0, dots);
+        tracking = mainPart.slice(dots + 3);
+      } else {
+        branch = mainPart;
+      }
+      if (bracketMatch) {
+        const aheadM = bracketMatch[1].match(/ahead (\d+)/);
+        const behindM = bracketMatch[1].match(/behind (\d+)/);
+        if (aheadM) ahead = Number(aheadM[1]);
+        if (behindM) behind = Number(behindM[1]);
+      }
+      continue;
+    }
+    if (line.length < 4) continue;
+    const staged = line[0];
+    const unstaged = line[1];
+    const filePath = line.slice(3).trim();
+    files.push({ status: `${staged}${unstaged}`, staged, unstaged, path: filePath });
+  }
+
+  const truncated = files.length > 200;
+  const shown = files.slice(0, 200);
+  const data = {
+    ok: true,
+    kind: "git_status" as const,
+    branch: branch || "HEAD",
+    tracking,
+    ahead,
+    behind,
+    clean: files.length === 0,
+    total: files.length,
+    files: shown,
+    truncated,
+  };
+  return { text: json(data), structured: data };
+}
+
+async function gitDiffTool(root: string, args: Args): Promise<WorkspaceToolResult> {
+  const rel = safeRel(arg(args, "path", "file"));
+  const staged = arg(args, "staged", "cached") === true;
+  const maxLines = clampInt(arg(args, "maxLines", "max_lines"), 300, 10, 1000);
+  const gitArgs = ["diff"];
+  if (staged) gitArgs.push("--cached");
+  if (rel) gitArgs.push("--", rel);
+
+  const res = await execGit(root, gitArgs, 15000);
+  if (!res.ok) {
+    const msg = res.stderr.trim() || "git diff failed";
+    return { text: `Error: ${msg}`, isError: true, structured: { ok: false, kind: "git_diff", error: msg } };
+  }
+  const raw = res.stdout.replace(/\r\n/g, "\n");
+  const allLines = raw ? raw.split("\n") : [];
+  const truncated = allLines.length > maxLines;
+  const diff = truncated ? allLines.slice(0, maxLines).join("\n") + `\n… (${allLines.length - maxLines} more lines truncated)` : raw;
+
+  const data = {
+    ok: true,
+    kind: "git_diff" as const,
+    path: rel || null,
+    staged,
+    empty: !raw.trim(),
+    totalLines: allLines.length,
+    truncated,
+    diff,
+  };
+  return { text: json(data), structured: data };
+}
+
+async function gitLogTool(root: string, args: Args): Promise<WorkspaceToolResult> {
+  const rel = safeRel(arg(args, "path", "file"));
+  const limit = clampInt(arg(args, "limit", "count", "n"), 15, 1, 50);
+  const gitArgs = ["log", `-n`, String(limit), "--pretty=format:%h%x1f%an%x1f%ad%x1f%s", "--date=short"];
+  if (rel) gitArgs.push("--", rel);
+
+  const res = await execGit(root, gitArgs, 10000);
+  if (!res.ok) {
+    const msg = res.stderr.trim() || "git log failed";
+    return { text: `Error: ${msg}`, isError: true, structured: { ok: false, kind: "git_log", error: msg } };
+  }
+  const commits = res.stdout
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [hash, author, date, subject] = line.split("\x1f");
+      return { hash: hash || "", author: author || "", date: date || "", subject: subject || "" };
+    });
+
+  const data = {
+    ok: true,
+    kind: "git_log" as const,
+    path: rel || null,
+    count: commits.length,
+    commits,
+  };
+  return { text: json(data), structured: data };
+}
+
+/* ── run_command ────────────────────────────────────────────────────── */
+
+const MAX_COMMAND_OUTPUT_BYTES = 24 * 1024;
+
+async function runCommandTool(root: string, args: Args): Promise<WorkspaceToolResult> {
+  const command = str(arg(args, "command", "cmd")).trim();
+  if (!command) throw new Error("command is required");
+  const cwdRel = safeRel(arg(args, "cwd", "dir", "directory"));
+  const cwdAbs = absInside(root, cwdRel);
+  const cwdStat = await stat(cwdAbs);
+  if (!cwdStat.isDirectory()) throw new Error(`Working directory is not a directory: ${cwdRel || "."}`);
+  const timeoutMs = clampInt(arg(args, "timeoutMs", "timeout_ms", "timeout"), 30000, 1000, 120000);
+
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    const child = spawn(command, {
+      cwd: cwdAbs,
+      shell: true,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let combinedBytes = 0;
+    let truncated = false;
+    let timedOut = false;
+    let settled = false;
+
+    const append = (chunk: Buffer, target: "stdout" | "stderr") => {
+      if (combinedBytes >= MAX_COMMAND_OUTPUT_BYTES) {
+        truncated = true;
+        return;
+      }
+      const remaining = MAX_COMMAND_OUTPUT_BYTES - combinedBytes;
+      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      if (chunk.length > remaining) truncated = true;
+      combinedBytes += slice.length;
+      const text = slice.toString("utf8");
+      if (target === "stdout") stdout += text;
+      else stderr += text;
+    };
+
+    child.stdout?.on("data", (d: Buffer) => append(d, "stdout"));
+    child.stderr?.on("data", (d: Buffer) => append(d, "stderr"));
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill("SIGTERM"); } catch {}
+      setTimeout(() => {
+        try { if (child.exitCode === null) child.kill("SIGKILL"); } catch {}
+      }, 2000);
+    }, timeoutMs);
+
+    const finalize = (exitCode: number | null, signal: NodeJS.Signals | null, errMsg?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const durationMs = Date.now() - startedAt;
+      const ok = !errMsg && !timedOut && exitCode === 0;
+      const combined = [
+        stdout.trimEnd(),
+        stderr.trimEnd() ? (stdout.trimEnd() ? `\n[stderr]\n${stderr.trimEnd()}` : stderr.trimEnd()) : "",
+        errMsg ? `\n[error]\n${errMsg}` : "",
+        timedOut ? `\n[timed out after ${timeoutMs}ms]` : "",
+        truncated ? "\n[output truncated]" : "",
+      ].filter(Boolean).join("");
+
+      const data = {
+        ok,
+        kind: "run_command" as const,
+        command,
+        cwd: cwdRel || ".",
+        exitCode,
+        signal,
+        timedOut,
+        durationMs,
+        truncated,
+        stdout: stdout.trimEnd(),
+        stderr: stderr.trimEnd(),
+        output: combined,
+      };
+      resolve({
+        text: json(data),
+        structured: data,
+        isError: !ok,
+      });
+    };
+
+    child.on("error", (err) => finalize(null, null, err.message));
+    child.on("close", (code, signal) => finalize(code, signal));
+  });
+}
+
 /* ── entry point ────────────────────────────────────────────────────── */
 
 export async function executeWorkspaceTool(name: string, rawArgs: unknown, root: string): Promise<WorkspaceToolResult> {
@@ -1197,6 +1482,14 @@ export async function executeWorkspaceTool(name: string, rawArgs: unknown, root:
         return await applyPatchTool(root, args);
       case "move_file":
         return await moveFileTool(root, args);
+      case "git_status":
+        return await gitStatusTool(root);
+      case "git_diff":
+        return await gitDiffTool(root, args);
+      case "git_log":
+        return await gitLogTool(root, args);
+      case "run_command":
+        return await runCommandTool(root, args);
       default:
         return { text: `Error: Unknown workspace tool '${name}'`, isError: true, structured: { ok: false, error: "unknown tool" } };
     }

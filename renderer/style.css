@@ -439,6 +439,23 @@ button:disabled{cursor:not-allowed}
 .tool-diff-line.hunk{color:var(--y-muted);font-weight:600}
 .tool-diff-line.meta{color:var(--y-muted);opacity:.75}
 .tool-file-action.move{color:var(--y-ink)}
+.tool-summary-line.mono{font-family:var(--y-mono);color:var(--y-ink)}
+.tool-approval{margin:6px 0 8px;padding:10px 12px;border-radius:10px;background:var(--y-soft);border:1px solid rgba(0,0,0,.08);display:flex;flex-direction:column;gap:8px}
+.tool-approval-label{font-size:12px;font-weight:600;color:var(--y-ink)}
+.tool-approval-cmd{margin:0;padding:8px 10px;border-radius:8px;background:var(--y-canvas);font-family:var(--y-mono);font-size:12px;line-height:18px;color:var(--y-ink);white-space:pre-wrap;word-break:break-word}
+.tool-approval-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tool-approval-btn{padding:5px 11px;border-radius:8px;border:1px solid rgba(0,0,0,.12);background:var(--y-canvas);color:var(--y-ink);font-size:12px;font-weight:500;cursor:pointer}
+.tool-approval-btn.primary{background:var(--y-ink);color:var(--y-canvas);border-color:var(--y-ink)}
+.tool-approval-btn.danger{color:var(--y-negative);border-color:rgba(228,30,63,.25)}
+.tool-approval-btn:hover{opacity:.88}
+.tool-approval-state{font-size:12px;font-weight:600;color:var(--y-positive)}
+.tool-approval-state.deny{color:var(--y-negative)}
+.turn-checkpoint{margin-top:10px;padding:7px 10px;border-radius:10px;background:var(--y-soft);border:1px solid rgba(0,0,0,.06);display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px}
+.turn-checkpoint-info{color:var(--y-muted);font-weight:500}
+.turn-checkpoint-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:8px;border:1px solid rgba(0,0,0,.1);background:var(--y-canvas);color:var(--y-ink);font-size:12px;font-weight:500;cursor:pointer}
+.turn-checkpoint-btn:hover:not(:disabled){background:var(--y-soft)}
+.turn-checkpoint-btn:disabled{opacity:.55;cursor:default}
+.turn-checkpoint.reverted .turn-checkpoint-info{color:var(--y-positive)}
 .tool-info{font-size:12px;line-height:16px;color:var(--y-muted);padding:2px 0}
 .diff-wrap{margin:8px 0 0}
 .diff-stat{font-weight:700;padding:1px 8px;border-radius:var(--y-radius-pill);background:var(--y-canvas);font-size:12px;font-family:var(--y-mono)}

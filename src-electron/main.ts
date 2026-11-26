@@ -11,8 +11,9 @@ import { loadMcpServers, saveMcpServers, validateMcpServers, type McpServerConfi
 import { resolveApiKey, isUsingFreeTier, resolveModelKey, modelKeyHint } from "../src/config.js";
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, resetQuota, QuotaExceededError, formatTimeRemaining, FREE_TIER_TOKEN_LIMIT, type QuotaStatus } from "../src/quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "../src/web.js";
-import { deleteFileInWorkspace, scanWorkspace, writeFileInWorkspace } from "./workspace.js";
-import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_WRITE_TOOLS, executeWorkspaceTool } from "./workspace-tools.js";
+import { deleteFileInWorkspace, scanWorkspace, writeFileInWorkspace } from "../src/workspace.js";
+import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_WRITE_TOOLS, WORKSPACE_APPROVAL_TOOLS, executeWorkspaceTool } from "../src/workspace-tools.js";
+import { setMcpClientVersion } from "../src/mcp-client.js";
 import { listChats, loadChat, saveChat, renameChat, deleteChat, deleteProjectChats } from "./chats.js";
 import { fetchRegistry, installExtension, listInstalled, uninstallExtension, validateManifest, describeManifest, parseManifestFile, extensionsDir, type ExtensionManifest } from "./extensions.js";
 import { authSignUp, authSignIn, authSignOut, authGetSession, authGetUser, isSupabaseConfigured, getProfileAvatar, getProfile, listProjects, createProject, getProject, updateProject, deleteProject, saveProjectMessages, loadProjectMessages, quotaGetServer, quotaRecordServer, quotaResetServer, type ServerQuotaState } from "./supabase.js";
@@ -41,13 +42,34 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  setMcpClientVersion(app.getVersion());
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
+type ToolApprovalDecision = "allow" | "allow-session" | "deny";
+const pendingToolApprovals = new Map<string, (decision: ToolApprovalDecision) => void>();
+const sessionApprovedCommands = new Set<string>();
+
+function resolveAllPendingApprovalsAsDeny(): void {
+  for (const [, resolve] of pendingToolApprovals) {
+    try { resolve("deny"); } catch {}
+  }
+  pendingToolApprovals.clear();
+}
+
+ipcMain.handle("meteor:toolApproval", (_e, payload: { approvalId: string; decision: ToolApprovalDecision }) => {
+  const resolver = pendingToolApprovals.get(payload?.approvalId);
+  if (!resolver) return { ok: false };
+  pendingToolApprovals.delete(payload.approvalId);
+  resolver(payload.decision ?? "deny");
+  return { ok: true };
+});
+
 app.on("window-all-closed", () => {
+  resolveAllPendingApprovalsAsDeny();
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -283,7 +305,7 @@ ipcMain.handle(
           if (mcpToolsCache && now - mcpToolsCache.at < 300000 && mcpToolsCache.cwd === termCwd) {
             mcpTools = mcpToolsCache.tools;
           } else {
-            const { listMcpTools } = await import("./mcp-client.js");
+            const { listMcpTools } = await import("../src/mcp-client.js");
             mcpTools = await withTimeout(listMcpTools(termCwd), 25000, "Listing MCP tools");
             mcpToolsCache = { tools: mcpTools, at: now, cwd: termCwd };
           }
@@ -310,8 +332,9 @@ ipcMain.handle(
       let messages: any[] = [...payload.messages];
       let finalText = "";
       let finalReasoning = "";
-      // Tool loop — up to 6 iterations
-      for (let iter = 0; iter < 6; iter++) {
+      // Tool loop — up to 12 iterations
+      const MAX_TOOL_ITERS = 12;
+      for (let iter = 0; iter < MAX_TOOL_ITERS; iter++) {
         const result = await complete({
           apiKey,
           apiModel: model.apiModel,
@@ -334,7 +357,7 @@ ipcMain.handle(
         for (const tc of result.toolCalls) {
           send("meteor:tool_call", { id: tc.id, server: tc.server, tool: tc.toolName, name: tc.name, arguments: tc.arguments, parsedArgs: tc.parsedArgs });
         }
-        // Execute tools (web tools or MCP tools, each capped with timeout)
+        // Execute tools (workspace, web, or MCP tools, each capped with timeout)
         const toolResults: Array<{ tool_call_id: string; content: string }> = [];
         for (const tc of result.toolCalls) {
           try {
@@ -345,9 +368,46 @@ ipcMain.handle(
               if (payload.mode === "plan" && WORKSPACE_WRITE_TOOLS.has(tc.toolName)) {
                 throw new Error(`${tc.toolName} is disabled in plan mode. Switch to Build to make changes.`);
               }
+              if (WORKSPACE_APPROVAL_TOOLS.has(tc.toolName)) {
+                const parsed = (tc.parsedArgs && typeof tc.parsedArgs === "object" ? tc.parsedArgs : {}) as Record<string, unknown>;
+                const command = String(parsed.command ?? parsed.cmd ?? "").trim();
+                const cwd = String(parsed.cwd ?? parsed.dir ?? "").trim();
+                if (!command) throw new Error("command is required");
+                if (!sessionApprovedCommands.has(command)) {
+                  const approvalId = `${id}-${tc.id}-${Date.now()}`;
+                  const decision = await new Promise<ToolApprovalDecision>((resolve) => {
+                    const timer = setTimeout(() => {
+                      pendingToolApprovals.delete(approvalId);
+                      resolve("deny");
+                    }, 5 * 60 * 1000);
+                    pendingToolApprovals.set(approvalId, (d) => {
+                      clearTimeout(timer);
+                      resolve(d);
+                    });
+                    send("meteor:tool_approval", {
+                      approvalId,
+                      toolCallId: tc.id,
+                      tool: tc.toolName,
+                      command,
+                      cwd: cwd || ".",
+                    });
+                  });
+                  if (decision === "deny") {
+                    throw new Error("Command execution denied by user.");
+                  }
+                  if (decision === "allow-session") {
+                    sessionApprovedCommands.add(command);
+                  }
+                }
+              }
+              const requestedTimeout =
+                tc.toolName === "run_command" && tc.parsedArgs && typeof tc.parsedArgs === "object"
+                  ? Number((tc.parsedArgs as Record<string, unknown>).timeoutMs ?? 30000)
+                  : 60000;
+              const toolTimeoutMs = Math.min(130000, Math.max(60000, (Number.isFinite(requestedTimeout) ? requestedTimeout : 30000) + 10000));
               const res = await withTimeout(
                 executeWorkspaceTool(tc.toolName, tc.parsedArgs ?? {}, workspaceRoot ?? ""),
-                60000,
+                toolTimeoutMs,
                 `Workspace tool ${tc.toolName}`,
               );
               text = res.text;
@@ -357,7 +417,7 @@ ipcMain.handle(
               text = await withTimeout(executeWebTool(tc.toolName, tc.parsedArgs), 30000, `Web tool ${tc.toolName}`);
               isError = text.startsWith("Error:") || text.startsWith("Failed to fetch");
             } else {
-              const { callMcpTool } = await import("./mcp-client.js");
+              const { callMcpTool } = await import("../src/mcp-client.js");
               const res = await withTimeout(callMcpTool(tc.server, tc.toolName, tc.parsedArgs ?? {}, termCwd), 60000, `Tool ${tc.server}.${tc.toolName}`);
               text = (res.content ?? []).map((c: { text?: string }) => c.text ?? "").join("\n") || JSON.stringify(res, null, 2);
               isError = !!res.isError;
@@ -381,7 +441,7 @@ ipcMain.handle(
           ...toolResults.map((tr) => ({ role: "tool", tool_call_id: tr.tool_call_id, content: tr.content } as unknown as Message)),
         ];
         // If model returned tool calls but no text, continue loop to get final answer
-        if (iter === 5) break;
+        if (iter === MAX_TOOL_ITERS - 1) break;
       }
       send("meteor:done", {
         text: finalText,
@@ -473,6 +533,7 @@ ipcMain.handle("workspace:open", async () => {
   const scan = await scanWorkspace(result.filePaths[0]);
   termCwd = scan.root;
   workspaceRoot = scan.root;
+  sessionApprovedCommands.clear();
   return scan;
 });
 
@@ -485,6 +546,8 @@ ipcMain.handle("workspace:refresh", async (_e, root: string) => {
 
 ipcMain.handle("workspace:close", () => {
   workspaceRoot = null;
+  sessionApprovedCommands.clear();
+  resolveAllPendingApprovalsAsDeny();
   return true;
 });
 
@@ -680,12 +743,12 @@ ipcMain.handle("mcp:validate", (_e, payload: { jsonText: string }) => {
 });
 
 ipcMain.handle("mcp:listTools", async () => {
-  const { listMcpTools } = await import("./mcp-client.js");
+  const { listMcpTools } = await import("../src/mcp-client.js");
   return listMcpTools(termCwd);
 });
 
 ipcMain.handle("mcp:callTool", async (_e, payload: { server: string; tool: string; args?: unknown }) => {
-  const { callMcpTool } = await import("./mcp-client.js");
+  const { callMcpTool } = await import("../src/mcp-client.js");
   return callMcpTool(payload.server, payload.tool, payload.args ?? {}, termCwd);
 });
 

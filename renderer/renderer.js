@@ -458,12 +458,16 @@ You have direct access to the user's workspace through tools. Use them instead o
 - list_files(path?, depth?, glob?): discover files and directories.
 - read_file(path, startLine?, endLine?): read a specific line range.
 - search(query, path?, glob?, literal?, caseSensitive?): find text or regex matches.
-- project_info(): project name, scripts, package manager and git status.`;
+- project_info(): project name, scripts, package manager and git status.
+- git_status(): git branch, ahead/behind, and changed/untracked files.
+- git_diff(path?, staged?, maxLines?): unified git diff for the workspace or a file.
+- git_log(limit?, path?): recent git commits for the workspace or a file.`;
 
 const WORKSPACE_TOOLS_PROTOCOL = `${WORKSPACE_TOOLS_HEADER}
 - edit_file(path, oldText, newText, replaceAll?): replace one exact block of text. PREFERRED for a single small change.
 - apply_patch(patch, dryRun?): apply a unified diff or '*** Begin Patch' block. Use for multi-file changes, many hunks, or creating/deleting files.
 - move_file(from, to, overwrite?): rename or move a file.
+- run_command(command, cwd?, timeoutMs?): run a shell command in the workspace (tests, typecheck, build, linters). Requires user approval before running.
 
 How to edit:
 1. Use search or list_files to locate the file, then read_file the relevant range.
@@ -1042,28 +1046,111 @@ function updateUndoUI() {
   if (cnt) cnt.textContent = undoStack.length ? String(undoStack.length) : "";
 }
 
+async function applyUndoEntry(entry) {
+  if (!entry || !workspace) return;
+  if (entry.deletePath) {
+    try {
+      await window.meteorAPI.deleteWorkspaceFile({ root: workspace.root, relPath: entry.deletePath });
+    } catch {}
+    workspace.files.delete(entry.deletePath);
+    const moved = tabs.find((x) => x.rel === entry.deletePath);
+    if (moved) closeTab(moved.id, true);
+  }
+  if (entry.oldContent !== null && entry.oldContent !== undefined && entry.path) {
+    await window.meteorAPI.writeWorkspaceFile({ root: workspace.root, relPath: entry.path, content: entry.oldContent });
+    workspace.files.set(entry.path, { path: entry.path, content: entry.oldContent, size: entry.oldContent.length });
+    const t = tabs.find((x) => x.rel === entry.path);
+    if (t) {
+      t.buffer = entry.oldContent;
+      t.savedContent = entry.oldContent;
+      if (activeTabId === t.id) {
+        els.editor.value = entry.oldContent;
+        updateHighlight();
+      }
+    }
+  }
+}
+
 async function undoLast() {
   const last = undoStack.pop();
   if (!last || !workspace) { updateUndoUI(); return; }
   try {
-    if (last.deletePath) {
-      try {
-        await window.meteorAPI.deleteWorkspaceFile({ root: workspace.root, relPath: last.deletePath });
-      } catch {}
-      workspace.files.delete(last.deletePath);
-      const moved = tabs.find((x) => x.rel === last.deletePath);
-      if (moved) closeTab(moved.id, true);
-    }
-    await window.meteorAPI.writeWorkspaceFile({ root: workspace.root, relPath: last.path, content: last.oldContent });
-    workspace.files.set(last.path, { path: last.path, content: last.oldContent, size: last.oldContent.length });
+    await applyUndoEntry(last);
     renderTree();
-    const t = tabs.find((x) => x.rel === last.path);
-    if (t) { t.buffer = last.oldContent; t.savedContent = last.oldContent; if (activeTabId === t.id) { els.editor.value = last.oldContent; updateHighlight(); } }
-    addMsg("system", `Undid ${last.path}`);
+    refreshGitStatus();
+    addMsg("system", `Undid ${last.path || last.deletePath}`);
   } catch (e) {
-    addMsg("system", `✗ undo failed ${last.path}: ${e instanceof Error ? e.message : String(e)}`);
+    addMsg("system", `✗ undo failed ${last.path || last.deletePath}: ${e instanceof Error ? e.message : String(e)}`);
   }
   updateUndoUI();
+}
+
+function recordTurnCheckpointChanges(structured, turnChanges) {
+  if (!structured || !Array.isArray(structured.files) || structured.dryRun || !turnChanges) return;
+  for (const f of structured.files) {
+    if (f.action === "create" && f.path) {
+      if (!turnChanges.has(f.path)) {
+        turnChanges.set(f.path, { action: "create", path: f.path, deletePath: f.path, oldContent: null });
+      }
+    } else if ((f.action === "update" || f.action === "delete") && f.path && typeof f.before === "string") {
+      if (!turnChanges.has(f.path)) {
+        turnChanges.set(f.path, { action: f.action, path: f.path, oldContent: f.before });
+      }
+    } else if (f.action === "move" && f.from && f.path && typeof f.before === "string") {
+      const existing = turnChanges.get(f.from);
+      if (existing) {
+        existing.deletePath = f.path;
+      } else {
+        turnChanges.set(f.from, { action: "move", path: f.from, deletePath: f.path, oldContent: f.before });
+      }
+    }
+  }
+}
+
+function buildTurnCheckpointBar(turnChanges) {
+  const entries = [...turnChanges.values()];
+  if (!entries.length) return null;
+  const bar = document.createElement("div");
+  bar.className = "turn-checkpoint";
+
+  const info = document.createElement("span");
+  info.className = "turn-checkpoint-info";
+  const paths = entries.map((e) => e.deletePath || e.path).filter(Boolean);
+  info.textContent = `Checkpoint · ${entries.length} file${entries.length === 1 ? "" : "s"} changed`;
+  info.title = paths.join("\n");
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "turn-checkpoint-btn";
+  btn.innerHTML = `${ICONS.undo}<span>Revert turn</span>`;
+  btn.addEventListener("click", async () => {
+    if (!workspace || btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "Reverting…";
+    let failed = 0;
+    for (const entry of [...entries].reverse()) {
+      try {
+        await applyUndoEntry(entry);
+      } catch (e) {
+        failed++;
+        addMsg("system", `✗ revert failed ${entry.path || entry.deletePath}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    renderTree();
+    scheduleWorkspaceRefresh();
+    refreshGitStatus();
+    if (failed === 0) {
+      bar.classList.add("reverted");
+      info.textContent = `Reverted ${entries.length} file${entries.length === 1 ? "" : "s"} from this turn`;
+      btn.textContent = "Reverted";
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = `${ICONS.undo}<span>Retry revert</span>`;
+    }
+  });
+
+  bar.append(info, btn);
+  return bar;
 }
 
 function updateHighlight() {
@@ -2148,6 +2235,8 @@ const TOOL_ICONS = {
   tool: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg>`,
   edit: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>`,
   file: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M13 2v7h7"/></svg>`,
+  terminal: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+  git: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 009 9"/></svg>`,
   check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`,
   alert: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg>`,
   chev: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>`,
@@ -2199,6 +2288,20 @@ function describeToolCall(call, args) {
         .filter((x) => x && x !== "/dev/null");
       const detail = paths.length ? paths.slice(0, 3).join(", ") + (paths.length > 3 ? ` +${paths.length - 3}` : "") : "";
       return { icon: "edit", running: "Applying patch", done: "Applied patch", failed: "Patch rejected", detail };
+    }
+    if (tool === "git_status") {
+      return { icon: "git", running: "Checking git status", done: "Checked git status", failed: "git status failed", detail: "" };
+    }
+    if (tool === "git_diff") {
+      const staged = args.staged || args.cached ? " (staged)" : "";
+      return { icon: "git", running: `Inspecting git diff${staged}`, done: `Inspected git diff${staged}`, failed: "git diff failed", detail: p };
+    }
+    if (tool === "git_log") {
+      return { icon: "git", running: "Reading git log", done: "Read git log", failed: "git log failed", detail: p || (args.limit ? `last ${args.limit}` : "") };
+    }
+    if (tool === "run_command") {
+      const cmd = String(args.command || args.cmd || "").trim();
+      return { icon: "terminal", running: "Running command", done: "Ran command", failed: "Command failed", detail: cmd.slice(0, 80) };
     }
   }
   const label = String(tool).replace(/[_-]+/g, " ");
@@ -2348,6 +2451,54 @@ function buildToolSummary(structured) {
   const wrap = document.createElement("div");
   wrap.className = "tool-summary";
 
+  // run_command -> command, exit code, duration
+  if (structured.kind === "run_command") {
+    const statusText = structured.timedOut
+      ? `timed out (${structured.durationMs}ms)`
+      : `exit ${structured.exitCode ?? "?"} · ${structured.durationMs}ms`;
+    wrap.append(toolSummaryLine(`$ ${structured.command}`, "mono"));
+    wrap.append(toolSummaryLine(`${statusText}${structured.cwd && structured.cwd !== "." ? ` · in ${structured.cwd}` : ""}${structured.truncated ? " · output truncated" : ""}`, structured.ok ? "" : "error"));
+    return wrap;
+  }
+
+  // git_status -> branch + changed files
+  if (structured.kind === "git_status") {
+    const sync = [structured.ahead ? `↑${structured.ahead}` : "", structured.behind ? `↓${structured.behind}` : ""].filter(Boolean).join(" ");
+    wrap.append(toolSummaryLine(`branch ${structured.branch}${sync ? ` ${sync}` : ""} · ${structured.clean ? "clean" : `${structured.total} changed`}`));
+    for (const f of (structured.files || []).slice(0, 12)) {
+      const row = document.createElement("div");
+      row.className = "tool-file";
+      const badge = document.createElement("span");
+      badge.className = "tool-file-action";
+      badge.textContent = f.status.trim() || "M";
+      row.append(badge, toolFileButton(f.path, f.path));
+      wrap.append(row);
+    }
+    if ((structured.total || 0) > 12) wrap.append(toolSummaryLine(`… and ${structured.total - 12} more`));
+    return wrap;
+  }
+
+  // git_diff -> diff preview
+  if (structured.kind === "git_diff") {
+    if (structured.empty) {
+      wrap.append(toolSummaryLine(`No ${structured.staged ? "staged " : ""}changes${structured.path ? ` in ${structured.path}` : ""}`));
+    } else {
+      wrap.append(toolSummaryLine(`${structured.totalLines} diff line${structured.totalLines === 1 ? "" : "s"}${structured.truncated ? " (truncated)" : ""}`));
+      wrap.append(buildDiffPreview(structured.diff, 120));
+    }
+    return wrap;
+  }
+
+  // git_log -> commits list
+  if (structured.kind === "git_log") {
+    const commits = structured.commits || [];
+    wrap.append(toolSummaryLine(`${commits.length} commit${commits.length === 1 ? "" : "s"}${structured.path ? ` for ${structured.path}` : ""}`));
+    for (const c of commits.slice(0, 10)) {
+      wrap.append(toolSummaryLine(`${c.hash} · ${c.date} · ${c.subject}`));
+    }
+    return wrap;
+  }
+
   // apply_patch -> one row per changed file
   if (Array.isArray(structured.files)) {
     for (const f of structured.files) {
@@ -2449,8 +2600,12 @@ function updateMcpToolResult(row, result, isError, structured) {
   const status = row.querySelector(".tool-status");
   if (status) status.innerHTML = isError ? TOOL_ICONS.alert : TOOL_ICONS.check;
   if (row._out) {
-    const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-    row._out.textContent = (text || "No output").slice(0, 8000).trim() || "No output";
+    if (structured && structured.kind === "run_command") {
+      row._out.textContent = (structured.output || "(no output)").slice(0, 8000);
+    } else {
+      const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+      row._out.textContent = (text || "No output").slice(0, 8000).trim() || "No output";
+    }
   }
 
   const summary = buildToolSummary(structured);
@@ -2460,7 +2615,7 @@ function updateMcpToolResult(row, result, isError, structured) {
     else if (body) body.append(summary);
     // Successful edits deserve to be visible immediately, and the tree/editor
     // should reflect what just changed on disk.
-    if (structured && Array.isArray(structured.files)) {
+    if (structured && Array.isArray(structured.files) && structured.kind !== "git_status") {
       if (body) body.classList.remove("hidden");
       row.classList.add("open");
       const head = row.querySelector(".tool-row-head");
@@ -2469,7 +2624,9 @@ function updateMcpToolResult(row, result, isError, structured) {
         row._undoPushed = true;
         // Tool results carry the pre-edit content so Ctrl+Z can restore it.
         for (const f of structured.files) {
-          if ((f.action === "update" || f.action === "delete") && typeof f.before === "string") {
+          if (f.action === "create" && f.path) {
+            pushUndo(f.path, null, { deletePath: f.path });
+          } else if ((f.action === "update" || f.action === "delete") && typeof f.before === "string") {
             pushUndo(f.path, f.before);
           } else if (f.action === "move" && typeof f.before === "string" && f.from) {
             pushUndo(f.from, f.before, { deletePath: f.path });
@@ -2839,6 +2996,8 @@ async function sendCurrent() {
     }
   }
   const toolBlocks = new Map();
+  const turnChanges = new Map();
+  let pendingApprovals = 0;
   const onToolCallUI = (call) => {
     bump();
     const id = call.id || call.tool || call.name || `${Date.now()}`;
@@ -2848,10 +3007,64 @@ async function sendCurrent() {
     toolsDiv.append(block);
     els.messages.scrollTop = els.messages.scrollHeight;
   };
+  const onToolApprovalUI = (req) => {
+    bump();
+    pendingApprovals++;
+    const block = toolBlocks.get(req.toolCallId) || [...toolBlocks.values()].slice(-1)[0];
+    const card = document.createElement("div");
+    card.className = "tool-approval";
+    const label = document.createElement("div");
+    label.className = "tool-approval-label";
+    label.textContent = `Approve command${req.cwd && req.cwd !== "." ? ` in ${req.cwd}` : ""}?`;
+    const cmdPre = document.createElement("pre");
+    cmdPre.className = "tool-approval-cmd";
+    cmdPre.textContent = `$ ${req.command || ""}`;
+    const actions = document.createElement("div");
+    actions.className = "tool-approval-actions";
+    const mkBtn = (text, decision, cls) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `tool-approval-btn ${cls}`;
+      b.textContent = text;
+      b.addEventListener("click", () => {
+        if (card.dataset.decided) return;
+        card.dataset.decided = decision;
+        pendingApprovals = Math.max(0, pendingApprovals - 1);
+        bump();
+        actions.innerHTML = `<span class="tool-approval-state ${decision}">${decision === "deny" ? "Denied" : decision === "allow-session" ? "Allowed for session" : "Allowed"}</span>`;
+        window.meteorAPI.approveTool(req.approvalId, decision);
+      });
+      return b;
+    };
+    actions.append(
+      mkBtn("Allow once", "allow", "primary"),
+      mkBtn("Allow in session", "allow-session", "secondary"),
+      mkBtn("Deny", "deny", "danger"),
+    );
+    card.append(label, cmdPre, actions);
+    if (block) {
+      const bodyEl = block.querySelector(".tool-body");
+      const headEl = block.querySelector(".tool-row-head");
+      if (bodyEl) {
+        bodyEl.classList.remove("hidden");
+        bodyEl.prepend(card);
+      } else {
+        block.append(card);
+      }
+      block.classList.add("open");
+      if (headEl) headEl.setAttribute("aria-expanded", "true");
+    } else {
+      toolsDiv.append(card);
+    }
+    els.messages.scrollTop = els.messages.scrollHeight;
+  };
   const onToolResultUI = (res) => {
     bump();
     const b = toolBlocks.get(res.id) || [...toolBlocks.values()].slice(-1)[0];
     if (b) updateMcpToolResult(b, res.result, !!res.isError, res.structured);
+    if (!res.isError && res.structured && res.structured.kind !== "git_status") {
+      recordTurnCheckpointChanges(res.structured, turnChanges);
+    }
     // also log to terminal history for context
     pushTerminalLog(`${res.server || "mcp"}:${res.tool || ""}`, typeof res.result === "string" ? res.result : JSON.stringify(res.result), res.isError ? 1 : 0);
   };
@@ -2890,6 +3103,7 @@ async function sendCurrent() {
       },
       onToolCall: onToolCallUI,
       onToolResult: onToolResultUI,
+      onToolApproval: onToolApprovalUI,
       onToolInfo: (info) => {
         bump();
         if (info && info.count) {
@@ -2945,6 +3159,10 @@ async function sendCurrent() {
         if (savedReasoningBox) body.prepend(savedReasoningBox);
         // re-append toolsDiv after renderAssistantFinal cleared body — re-add tools
         if (toolsDiv.childNodes.length) body.append(toolsDiv);
+        if (turnChanges.size > 0) {
+          const checkpointBar = buildTurnCheckpointBar(turnChanges);
+          if (checkpointBar) body.append(checkpointBar);
+        }
         chatHistory.push({ role: "assistant", content: acc });
         if (chatHistory.length > 80) chatHistory.splice(0, chatHistory.length - 80);
         // persist to meteor_projects
@@ -2974,6 +3192,10 @@ async function sendCurrent() {
   );
   // watchdog: if the main process goes silent (hung stream/tool), unfreeze the UI
   activityWatch = setInterval(() => {
+    if (pendingApprovals > 0) {
+      bump();
+      return;
+    }
     if (Date.now() - lastActivity > 90000) {
       const w = activityWatch; activityWatch = null;
       if (w) clearInterval(w);

@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld("meteorAPI", {
       toolResult: ipcRenderer.on(`meteor:tool_result:${id}`, (_e, data) => handlers.onToolResult?.(data)),
       toolInfo: ipcRenderer.on(`meteor:tool_info:${id}`, (_e, data) => handlers.onToolInfo?.(data)),
       toolDelta: ipcRenderer.on(`meteor:tool_delta:${id}`, (_e, data) => handlers.onToolDelta?.(data)),
+      toolApproval: ipcRenderer.on(`meteor:tool_approval:${id}`, (_e, data) => handlers.onToolApproval?.(data)),
     };
     function cleanup(kind, msg) {
       active.delete({ id, streams, handlers });
@@ -55,6 +56,7 @@ contextBridge.exposeInMainWorld("meteorAPI", {
       ipcRenderer.removeAllListeners(`meteor:tool_result:${id}`);
       ipcRenderer.removeAllListeners(`meteor:tool_info:${id}`);
       ipcRenderer.removeAllListeners(`meteor:tool_delta:${id}`);
+      ipcRenderer.removeAllListeners(`meteor:tool_approval:${id}`);
       if (kind === "error") handlers.onError?.(msg);
       else handlers.onDone?.(msg);
     }
@@ -69,9 +71,11 @@ contextBridge.exposeInMainWorld("meteorAPI", {
       ipcRenderer.removeAllListeners(`meteor:tool_result:${id}`);
       ipcRenderer.removeAllListeners(`meteor:tool_info:${id}`);
       ipcRenderer.removeAllListeners(`meteor:tool_delta:${id}`);
+      ipcRenderer.removeAllListeners(`meteor:tool_approval:${id}`);
       active.forEach((a) => a.id === id && active.delete(a));
     };
   },
+  approveTool: (approvalId, decision) => ipcRenderer.invoke("meteor:toolApproval", { approvalId, decision }),
   auth: {
     signUp: (email, password) => ipcRenderer.invoke("auth:signUp", { email, password }),
     signIn: (email, password) => ipcRenderer.invoke("auth:signIn", { email, password }),

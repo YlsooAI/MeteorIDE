@@ -1,21 +1,58 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS, type MeteorModel } from "./models.js";
-import { complete, ZenError, type Message } from "./zen.js";
-import { clearApiKey, loadConfig, resolveApiKey, resetConfig, saveConfig, isUsingFreeTier, saveBrowserbaseKey, resolveBrowserbaseKey, resolveModelKey, modelKeyHint, saveTokenRouterKey, saveOrcaRouterKey, saveOpenRouterKey, saveApinexKey, resolveTokenRouterKey, resolveOrcaRouterKey } from "./config.js";
+import { complete, ZenError, type Message, type ToolDefinition } from "./zen.js";
+import { clearApiKey, loadConfig, loadMcpServers, resolveApiKey, resetConfig, saveConfig, isUsingFreeTier, saveBrowserbaseKey, resolveBrowserbaseKey, resolveModelKey, modelKeyHint, saveTokenRouterKey, saveOrcaRouterKey, saveOpenRouterKey, saveApinexKey, resolveTokenRouterKey, resolveOrcaRouterKey } from "./config.js";
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, formatTimeRemaining, QuotaExceededError } from "./quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "./web.js";
+import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_WRITE_TOOLS, WORKSPACE_APPROVAL_TOOLS, executeWorkspaceTool } from "./workspace-tools.js";
+import { writeFileInWorkspace, deleteFileInWorkspace } from "./workspace.js";
+import { listMcpTools, callMcpTool, killAllMcp, setMcpClientVersion } from "./mcp-client.js";
 
-const VERSION = "0.2.24";
+const VERSION = "0.2.25";
+setMcpClientVersion(VERSION);
+
 const DEFAULT_SYSTEM =
-  "You are Meteor, a helpful assistant. Answer concisely. You can use full markdown: headings, bold, italic, lists, tables, blockquotes, links, and fenced code blocks with language tags. Prefer markdown for structure and readability.\n\nYou have built-in web tools:\n- fetch_url: fetch the live readable text or markdown content of any URL or link the user provides or asks about.\n- search_internet: search the internet via Browserbase to find up-to-date documentation, news, facts, and code examples whenever current information is needed. Use it proactively whenever fresh context is required.";
+  "You are Meteor, a helpful AI coding assistant. Answer concisely. You can use full markdown: headings, bold, italic, lists, tables, blockquotes, links, and fenced code blocks with language tags. Prefer markdown for structure and readability.\n\nYou have built-in web tools:\n- fetch_url: fetch the live readable text or markdown content of any URL or link the user provides or asks about.\n- search_internet: search the internet via Browserbase to find up-to-date documentation, news, facts, and code examples whenever current information is needed. Use it proactively whenever fresh context is required.";
+
+function buildCliSystemPrompt(args: CliArgs, workspaceRoot: string | null): string {
+  if (args.system) return args.system;
+  if (!workspaceRoot || args.noTools) return DEFAULT_SYSTEM;
+  const readTools = [
+    "- list_files(path?, depth?, glob?): discover files and directories.",
+    "- read_file(path, startLine?, endLine?): read a specific line range.",
+    "- search(query, path?, glob?, literal?, caseSensitive?): find text or regex matches.",
+    "- project_info(): project name, scripts, package manager, and git status.",
+    "- git_status(): git branch, ahead/behind, and changed/untracked files.",
+    "- git_diff(path?, staged?, maxLines?): unified git diff for the workspace or a file.",
+    "- git_log(limit?, path?): recent git commits for the workspace or a file.",
+  ];
+  const writeTools = [
+    "- edit_file(path, oldText, newText, replaceAll?): replace one exact block of text.",
+    "- apply_patch(patch, dryRun?): apply a unified diff or '*** Begin Patch' block.",
+    "- move_file(from, to, overwrite?): rename or move a file.",
+    "- run_command(command, cwd?, timeoutMs?): run a shell command in the workspace (tests, typecheck, build, linters). Requires user approval.",
+  ];
+  const toolLines = args.mode === "plan" ? readTools : [...readTools, ...writeTools];
+  const modeNote =
+    args.mode === "plan"
+      ? "You are in PLAN (read-only) mode. Inspect files and propose changes without modifying the workspace."
+      : "You are in BUILD mode. Inspect files before editing, use workspace-relative paths, and run tests or typecheck via run_command when appropriate.";
+  return `${DEFAULT_SYSTEM}\n\n# Workspace tools (${workspaceRoot})\n${toolLines.join("\n")}\n\n${modeNote}`;
+}
 
 interface CliArgs {
   model?: string;
   system?: string;
   apiKey?: string;
   reasoningEffort?: string;
+  cwd?: string;
+  mode: "build" | "plan";
+  yes: boolean;
+  noTools: boolean;
+  mcp: boolean;
   stream: boolean;
   prompt: string[];
   command?: string;
@@ -26,8 +63,8 @@ interface CliArgs {
 const USAGE = `Meteor — AI in your terminal
 
 Usage
-  meteor [prompt...]              One-shot question (streams the answer)
-  meteor chat [-m <model>]        Interactive session
+  meteor [prompt...]              One-shot question or coding task (streams the answer)
+  meteor chat [-m <model>]        Interactive coding session with workspace & MCP tools
   meteor quota                    Show your free tier quota usage (10M tokens / 5h)
   meteor build                    Build the project (emits to dist/)
   meteor plan                     Plan the build — preview without writing files
@@ -42,23 +79,25 @@ Usage
   meteor auth clear                     Remove stored API key
 
 Modes
-  Build   actually writes files (code + dist)
-  Plan    previews the plan only — no files are written.
-          In the app, toggle Plan / Build at the top.
-          In the CLI, use  meteor plan  vs  meteor build
-          or  npm run plan  vs  npm run build
+  Build   actually writes files and can run approved commands (default)
+  Plan    read-only investigation — no files are written (--plan / --read-only)
 
 Models
   sunlight-2.1      Sunlight 2.1   (default)
 
 Options
-  -m, --model <model>    Model (sunlight-2.1)
+  -m, --model <model>      Model (sunlight-2.1)
   -r, --reasoning <effort> Reasoning effort (default, minimal, low, medium, high, xhigh)
-  -s, --system <text>    Override the system prompt
-      --api-key <key>    Use this key for one call (else METEOR_API_KEY / stored key)
-      --no-stream        Wait for the full response instead of streaming
-  -h, --help             Show this help
-  -v, --version          Show version
+  -s, --system <text>      Override the system prompt
+      --cwd <dir>          Workspace root directory (default: current directory)
+      --plan, --read-only  Read-only mode (disable file edits and run_command)
+  -y, --yes                Auto-approve run_command tool calls
+      --mcp                Always expose configured MCP server tools
+      --no-tools           Disable workspace and MCP tools
+      --api-key <key>      Use this key for one call (else METEOR_API_KEY / stored key)
+      --no-stream          Wait for the full response instead of streaming
+  -h, --help               Show this help
+  -v, --version            Show version
 
 Environment
   METEOR_API_KEY         Your Meteor API key
@@ -68,7 +107,7 @@ Environment
 `;
 
 function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { stream: true, prompt: [], help: false, version: false };
+  const args: CliArgs = { stream: true, mode: "build", yes: false, noTools: false, mcp: false, prompt: [], help: false, version: false };
   const rest = [...argv];
   if (rest.length > 0 && !rest[0].startsWith("-") && ["chat", "models", "auth", "help", "build", "plan", "quota"].includes(rest[0])) {
     args.command = rest.shift();
@@ -87,6 +126,23 @@ function parseArgs(argv: string[]): CliArgs {
       case "-s":
       case "--system":
         args.system = rest.shift();
+        break;
+      case "--cwd":
+        args.cwd = rest.shift();
+        break;
+      case "--plan":
+      case "--read-only":
+        args.mode = "plan";
+        break;
+      case "-y":
+      case "--yes":
+        args.yes = true;
+        break;
+      case "--no-tools":
+        args.noTools = true;
+        break;
+      case "--mcp":
+        args.mcp = true;
         break;
       case "--api-key":
         args.apiKey = rest.shift();
@@ -119,7 +175,121 @@ function requireKey(args: CliArgs, model?: MeteorModel): string {
   return key;
 }
 
-async function runCompletion(args: CliArgs, messages: Message[], apiKey: string, model: MeteorModel): Promise<string> {
+interface TurnFileChange {
+  action: "create" | "update" | "delete" | "move";
+  path: string;
+  deletePath?: string;
+  oldContent: string | null;
+}
+
+interface CompletionRuntime {
+  workspaceRoot: string | null;
+  sessionApprovedCommands: Set<string>;
+  askLine?: (prompt: string) => Promise<string | null>;
+  turnChanges?: Map<string, TurnFileChange>;
+}
+
+function getLastUserText(msgs: Message[]): string {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "user") {
+      const c = msgs[i].content as unknown;
+      if (typeof c === "string") return c;
+      if (Array.isArray(c)) return (c as Array<{ text?: string }>).map((p) => p.text || "").join(" ");
+      return String(c ?? "");
+    }
+  }
+  return "";
+}
+
+function mentionsMcp(text: string, serverNames: string[]): boolean {
+  if (!text) return false;
+  const low = text.toLowerCase();
+  if (low.includes("mcp") || text.includes("@") || low.includes("use tool") || low.includes("call tool") || low.includes("use mcp")) return true;
+  for (const n of serverNames) if (n && low.includes(n.toLowerCase())) return true;
+  return false;
+}
+
+function recordCliTurnChanges(structured: unknown, turnChanges?: Map<string, TurnFileChange>): void {
+  if (!turnChanges || !structured || typeof structured !== "object") return;
+  const s = structured as { kind?: string; dryRun?: boolean; files?: Array<{ action?: string; path?: string; from?: string; before?: string }> };
+  if (s.dryRun || s.kind === "git_status" || !Array.isArray(s.files)) return;
+  for (const f of s.files) {
+    if (f.action === "create" && f.path) {
+      if (!turnChanges.has(f.path)) {
+        turnChanges.set(f.path, { action: "create", path: f.path, deletePath: f.path, oldContent: null });
+      }
+    } else if ((f.action === "update" || f.action === "delete") && f.path && typeof f.before === "string") {
+      if (!turnChanges.has(f.path)) {
+        turnChanges.set(f.path, { action: f.action, path: f.path, oldContent: f.before });
+      }
+    } else if (f.action === "move" && f.from && f.path && typeof f.before === "string") {
+      const existing = turnChanges.get(f.from);
+      if (existing) {
+        existing.deletePath = f.path;
+      } else {
+        turnChanges.set(f.from, { action: "move", path: f.from, deletePath: f.path, oldContent: f.before });
+      }
+    }
+  }
+}
+
+async function revertCliCheckpoint(root: string, checkpoint: Map<string, TurnFileChange>): Promise<{ reverted: number; failed: number }> {
+  let reverted = 0;
+  let failed = 0;
+  const entries = [...checkpoint.values()].reverse();
+  for (const entry of entries) {
+    try {
+      if (entry.deletePath) {
+        try { await deleteFileInWorkspace(root, entry.deletePath); } catch {}
+      }
+      if (entry.oldContent !== null && entry.path) {
+        await writeFileInWorkspace(root, entry.path, entry.oldContent);
+      }
+      reverted++;
+    } catch (err) {
+      failed++;
+      console.error(`\x1b[31m✗ failed to revert ${entry.path || entry.deletePath}:\x1b[0m ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { reverted, failed };
+}
+
+async function promptCommandApproval(
+  command: string,
+  cwd: string | undefined,
+  args: CliArgs,
+  runtime: CompletionRuntime,
+): Promise<boolean> {
+  if (args.yes || runtime.sessionApprovedCommands.has(command)) return true;
+  if (!process.stdin.isTTY) return false;
+  const dirNote = cwd && cwd !== "." ? ` (in ${cwd})` : "";
+  const promptText = `\n\x1b[33mApprove command${dirNote}:\x1b[0m $ ${command} [y/N/a(lways)] `;
+  let answer: string | null = null;
+  if (runtime.askLine) {
+    answer = await runtime.askLine(promptText);
+  } else {
+    const rl = createInterface({ input, output });
+    try {
+      answer = await rl.question(promptText);
+    } finally {
+      rl.close();
+    }
+  }
+  const norm = (answer ?? "").trim().toLowerCase();
+  if (norm === "a" || norm === "always") {
+    runtime.sessionApprovedCommands.add(command);
+    return true;
+  }
+  return norm === "y" || norm === "yes";
+}
+
+async function runCompletion(
+  args: CliArgs,
+  messages: Message[],
+  apiKey: string,
+  model: MeteorModel,
+  runtime: CompletionRuntime,
+): Promise<string> {
   const isFree = isUsingFreeTier(args.apiKey, model.provider);
   checkQuotaOrThrow(isFree);
 
@@ -127,10 +297,40 @@ async function runCompletion(args: CliArgs, messages: Message[], apiKey: string,
   const norm = (args.reasoningEffort || "").toLowerCase();
   const re = norm && norm !== "default" && norm !== "auto" && allowed.includes(norm) ? norm : undefined;
 
+  let mcpTools: ToolDefinition[] = [];
+  if (!args.noTools) {
+    try {
+      const servers = loadMcpServers();
+      const serverNames = Object.keys(servers);
+      if (serverNames.length > 0 && (args.mcp || mentionsMcp(getLastUserText(messages), serverNames))) {
+        const discovered = await listMcpTools(runtime.workspaceRoot ?? process.cwd());
+        mcpTools = discovered.map((t) => ({
+          server: t.server,
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+        }));
+        if (mcpTools.length > 0) {
+          process.stdout.write(`\x1b[90m[mcp: ${mcpTools.length} tool${mcpTools.length === 1 ? "" : "s"} loaded]\x1b[0m\n`);
+        }
+      }
+    } catch (err) {
+      console.error(`\x1b[90m[mcp warning: ${err instanceof Error ? err.message : String(err)}]\x1b[0m`);
+    }
+  }
+
+  const workspaceTools: ToolDefinition[] =
+    !args.noTools && runtime.workspaceRoot
+      ? WORKSPACE_TOOL_DEFINITIONS.filter((tool) => !(args.mode === "plan" && WORKSPACE_WRITE_TOOLS.has(tool.name)))
+      : [];
+
+  const toolDefs: ToolDefinition[] = [...workspaceTools, ...WEB_TOOL_DEFINITIONS, ...mcpTools];
+
   let currentMessages: any[] = [...messages];
   let finalText = "";
 
-  for (let iter = 0; iter < 5; iter++) {
+  const MAX_TOOL_ITERS = 12;
+  for (let iter = 0; iter < MAX_TOOL_ITERS; iter++) {
     const res = await complete({
       apiKey,
       apiModel: model.apiModel,
@@ -140,7 +340,7 @@ async function runCompletion(args: CliArgs, messages: Message[], apiKey: string,
       messages: currentMessages,
       stream: args.stream,
       reasoningEffort: re,
-      tools: WEB_TOOL_DEFINITIONS,
+      tools: toolDefs.length > 0 ? toolDefs : undefined,
       onDelta: (text) => process.stdout.write(text),
     });
 
@@ -153,24 +353,74 @@ async function runCompletion(args: CliArgs, messages: Message[], apiKey: string,
 
     const toolResults: Array<{ tool_call_id: string; content: string }> = [];
     for (const tc of res.toolCalls) {
-      const parsedArgs: any = tc.parsedArgs ?? (() => {
-        try { return JSON.parse(tc.arguments || "{}"); } catch { return {}; }
-      })();
+      const parsedArgs: Record<string, unknown> = (tc.parsedArgs && typeof tc.parsedArgs === "object"
+        ? tc.parsedArgs
+        : (() => {
+            try { return JSON.parse(tc.arguments || "{}"); } catch { return {}; }
+          })()) as Record<string, unknown>;
 
-      if (tc.toolName === "search_internet" || tc.name.endsWith("search_internet")) {
-        process.stdout.write(`\n\x1b[35m🔍 [search_internet] "${parsedArgs?.query || ""}"\x1b[0m\n`);
-      } else if (tc.toolName === "fetch_url" || tc.name.endsWith("fetch_url")) {
-        process.stdout.write(`\n\x1b[36m🌐 [fetch_url] ${parsedArgs?.url || ""}\x1b[0m\n`);
+      if (tc.server === "workspace") {
+        const detail =
+          tc.toolName === "run_command"
+            ? `$ ${String(parsedArgs.command ?? "")}`
+            : tc.toolName === "search"
+              ? `"${String(parsedArgs.query ?? "")}"`
+              : String(parsedArgs.path ?? parsedArgs.from ?? "");
+        process.stdout.write(`\n\x1b[36m⚙ [${tc.toolName}]${detail ? ` ${detail}` : ""}\x1b[0m\n`);
+        try {
+          if (args.mode === "plan" && WORKSPACE_WRITE_TOOLS.has(tc.toolName)) {
+            throw new Error(`${tc.toolName} is disabled in plan mode.`);
+          }
+          if (WORKSPACE_APPROVAL_TOOLS.has(tc.toolName)) {
+            const cmd = String(parsedArgs.command ?? parsedArgs.cmd ?? "").trim();
+            const cwdArg = parsedArgs.cwd ? String(parsedArgs.cwd) : undefined;
+            if (!cmd) throw new Error("command is required");
+            const approved = await promptCommandApproval(cmd, cwdArg, args, runtime);
+            if (!approved) {
+              const reason = process.stdin.isTTY
+                ? "Command execution denied by user."
+                : "Command execution denied in non-interactive mode. Pass --yes to auto-approve commands.";
+              throw new Error(reason);
+            }
+          }
+          const result = await executeWorkspaceTool(tc.toolName, parsedArgs, runtime.workspaceRoot ?? "");
+          if (!result.isError) {
+            recordCliTurnChanges(result.structured, runtime.turnChanges);
+          }
+          if (tc.toolName === "run_command" && result.structured && typeof result.structured === "object") {
+            const st = result.structured as { exitCode?: number | null; durationMs?: number; ok?: boolean };
+            const color = st.ok ? "\x1b[32m" : "\x1b[31m";
+            process.stdout.write(`${color}  ↳ exit ${st.exitCode ?? "?"} (${st.durationMs ?? 0}ms)\x1b[0m\n`);
+          }
+          toolResults.push({ tool_call_id: tc.id, content: result.text });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stdout.write(`\x1b[31m  ↳ ${msg}\x1b[0m\n`);
+          toolResults.push({ tool_call_id: tc.id, content: `Error: ${msg}` });
+        }
+      } else if (tc.server === "web" || tc.toolName === "search_internet" || tc.toolName === "fetch_url") {
+        if (tc.toolName === "search_internet" || tc.name.endsWith("search_internet")) {
+          process.stdout.write(`\n\x1b[35m🔍 [search_internet] "${parsedArgs?.query || ""}"\x1b[0m\n`);
+        } else {
+          process.stdout.write(`\n\x1b[36m🌐 [fetch_url] ${parsedArgs?.url || ""}\x1b[0m\n`);
+        }
+        try {
+          const text = await executeWebTool(tc.toolName, parsedArgs);
+          toolResults.push({ tool_call_id: tc.id, content: text });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          toolResults.push({ tool_call_id: tc.id, content: `Error: ${msg}` });
+        }
       } else {
-        process.stdout.write(`\n\x1b[33m⚡ [${tc.toolName}]\x1b[0m\n`);
-      }
-
-      try {
-        const text = await executeWebTool(tc.toolName, parsedArgs);
-        toolResults.push({ tool_call_id: tc.id, content: text });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        toolResults.push({ tool_call_id: tc.id, content: `Error: ${msg}` });
+        process.stdout.write(`\n\x1b[33m⚡ [${tc.server}.${tc.toolName}]\x1b[0m\n`);
+        try {
+          const resMcp = await callMcpTool(tc.server, tc.toolName, parsedArgs, runtime.workspaceRoot ?? process.cwd());
+          const text = (resMcp.content ?? []).map((c: { text?: string }) => c.text ?? "").join("\n") || JSON.stringify(resMcp, null, 2);
+          toolResults.push({ tool_call_id: tc.id, content: text });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          toolResults.push({ tool_call_id: tc.id, content: `Error: ${msg}` });
+        }
       }
     }
 
@@ -220,26 +470,39 @@ async function askOnce(args: CliArgs): Promise<void> {
   const apiKey = requireKey(args, model);
   const prompt = args.prompt.join(" ").trim();
   if (!prompt) throw new Error("Provide a prompt, e.g. meteor \"explain event loops\"");
+  const workspaceRoot = args.noTools ? null : path.resolve(args.cwd ?? process.cwd());
   const messages: Message[] = [
-    { role: "system", content: args.system ?? DEFAULT_SYSTEM },
+    { role: "system", content: buildCliSystemPrompt(args, workspaceRoot) },
     { role: "user", content: prompt },
   ];
-  const answer = await runCompletion(args, messages, apiKey, model);
-  if (!args.stream && answer) {
-    const out = process.stdout.isTTY ? renderAnsi(answer) : answer;
-    console.log(out);
-  } else process.stdout.write("\n");
+  const runtime: CompletionRuntime = {
+    workspaceRoot,
+    sessionApprovedCommands: new Set(),
+  };
+  try {
+    const answer = await runCompletion(args, messages, apiKey, model, runtime);
+    if (!args.stream && answer) {
+      const out = process.stdout.isTTY ? renderAnsi(answer) : answer;
+      console.log(out);
+    } else process.stdout.write("\n");
+  } finally {
+    killAllMcp();
+  }
 }
 
 async function chatLoop(args: CliArgs): Promise<void> {
   const model = resolveModel(args.model ?? loadConfig().defaultModel);
   const apiKey = requireKey(args, model);
+  const workspaceRoot = args.noTools ? null : path.resolve(args.cwd ?? process.cwd());
   let reasoningEffort = args.reasoningEffort ?? "";
   const reLabel = () => reasoningEffort ? ` · reasoning ${reasoningEffort}` : "";
-  console.log(`Meteor chat — ${model.name}${reLabel()}`);
-  console.log('Type /exit to quit, /clear to reset history, /model to switch models, /reasoning to set effort.\n');
+  const modeLabel = () => (args.noTools ? "no-tools" : args.mode);
+  console.log(`Meteor chat — ${model.name}${reLabel()} · ${modeLabel()}${workspaceRoot ? ` · ${path.basename(workspaceRoot)}` : ""}`);
+  console.log("Type /exit to quit, /clear to reset, /mode [plan|build], /undo to revert last turn, /tools, /help.\n");
   const rl = createInterface({ input, output });
-  const history: Message[] = [{ role: "system", content: args.system ?? DEFAULT_SYSTEM }];
+  const history: Message[] = [{ role: "system", content: buildCliSystemPrompt(args, workspaceRoot) }];
+  const sessionApprovedCommands = new Set<string>();
+  const turnCheckpoints: Array<Map<string, TurnFileChange>> = [];
   const queue: string[] = [];
   let waiter: ((line: string | null) => void) | null = null;
   let closed = false;
@@ -267,6 +530,10 @@ async function chatLoop(args: CliArgs): Promise<void> {
       waiter = resolve;
     });
   };
+  const askLine = async (promptText: string): Promise<string | null> => {
+    process.stdout.write(promptText);
+    return nextLine();
+  };
   try {
     while (true) {
       process.stdout.write("you > ");
@@ -280,8 +547,41 @@ async function chatLoop(args: CliArgs): Promise<void> {
       if (line === "/exit" || line === "/quit") break;
       if (line === "/clear") {
         history.length = 0;
-        history.push({ role: "system", content: args.system ?? DEFAULT_SYSTEM });
+        history.push({ role: "system", content: buildCliSystemPrompt(args, workspaceRoot) });
         console.log("(history cleared)\n");
+        continue;
+      }
+      if (line === "/mode" || line.startsWith("/mode ")) {
+        const target = line.slice("/mode".length).trim().toLowerCase();
+        if (!target) {
+          console.log(`mode: ${args.mode} (use /mode plan or /mode build)\n`);
+        } else if (target === "plan" || target === "build") {
+          args.mode = target;
+          history[0] = { role: "system", content: buildCliSystemPrompt(args, workspaceRoot) };
+          console.log(`switched mode → ${args.mode}\n`);
+        } else {
+          console.log(`unknown mode "${target}". Use plan or build.\n`);
+        }
+        continue;
+      }
+      if (line === "/undo") {
+        if (!workspaceRoot || turnCheckpoints.length === 0) {
+          console.log("nothing to undo\n");
+          continue;
+        }
+        const cp = turnCheckpoints.pop()!;
+        const { reverted, failed } = await revertCliCheckpoint(workspaceRoot, cp);
+        console.log(`\x1b[32m↺ Reverted ${reverted} file${reverted === 1 ? "" : "s"}${failed ? ` (${failed} failed)` : ""}\x1b[0m\n`);
+        continue;
+      }
+      if (line === "/tools") {
+        const wsTools = args.noTools
+          ? []
+          : WORKSPACE_TOOL_DEFINITIONS.filter((t) => !(args.mode === "plan" && WORKSPACE_WRITE_TOOLS.has(t.name))).map((t) => t.name);
+        const mcpServers = Object.keys(loadMcpServers());
+        console.log(`workspace (${args.mode}): ${wsTools.length ? wsTools.join(", ") : "disabled"}`);
+        console.log(`web: ${WEB_TOOL_DEFINITIONS.map((t) => t.name).join(", ")}`);
+        console.log(`mcp servers: ${mcpServers.length ? mcpServers.join(", ") : "none configured"}\n`);
         continue;
       }
       if (line === "/model" || line.startsWith("/model ")) {
@@ -311,14 +611,20 @@ async function chatLoop(args: CliArgs): Promise<void> {
         continue;
       }
       if (line === "/help") {
-        console.log("/exit /clear /model [name] /reasoning [effort] /quota /help\n");
+        console.log("/exit /clear /mode [plan|build] /undo /tools /model [name] /reasoning [effort] /quota /help\n");
         continue;
       }
       history.push({ role: "user", content: line });
       process.stdout.write(`${model.name.toLowerCase()}${reLabel()} > `);
+      const turnChanges = new Map<string, TurnFileChange>();
       let answer = "";
       try {
-        answer = await runCompletion(args, history, apiKey, model);
+        answer = await runCompletion(args, history, apiKey, model, {
+          workspaceRoot,
+          sessionApprovedCommands,
+          askLine,
+          turnChanges,
+        });
         if (!args.stream && answer) {
           const out = process.stdout.isTTY ? renderAnsi(answer) : answer;
           process.stdout.write(out);
@@ -329,11 +635,18 @@ async function chatLoop(args: CliArgs): Promise<void> {
         history.pop();
         continue;
       }
-      process.stdout.write("\n\n");
+      process.stdout.write("\n");
+      if (turnChanges.size > 0) {
+        turnCheckpoints.push(turnChanges);
+        if (turnCheckpoints.length > 20) turnCheckpoints.shift();
+        console.log(`\x1b[90m✓ Checkpoint saved (${turnChanges.size} file${turnChanges.size === 1 ? "" : "s"} changed — type /undo to revert this turn)\x1b[0m`);
+      }
+      process.stdout.write("\n");
       history.push({ role: "assistant", content: answer });
     }
   } finally {
     rl.close();
+    killAllMcp();
   }
 }
 
