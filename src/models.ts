@@ -1,5 +1,5 @@
 export type Protocol = "chat" | "responses";
-export type Provider = "zen" | "mercury" | "tokenrouter" | "orcarouter" | "openrouter" | "apinex";
+export type Provider = "zen" | "mercury" | "tokenrouter" | "orcarouter" | "openrouter" | "apinex" | "outrun";
 
 export interface MeteorModel {
   key: string;
@@ -20,11 +20,11 @@ export const MODELS: Record<string, MeteorModel> = {
   "sunlight-2.1": {
     key: "sunlight-2.1",
     name: "Sunlight 2.1",
-    zenId: "apinex/free/hy4",
-    apiModel: "free/hy4",
+    zenId: "outrun/glm-5.3-flash-uncensored",
+    apiModel: "glm-5.3-flash-uncensored",
     protocol: "chat",
-    provider: "apinex",
-    baseUrl: "https://api.apinex.bond/v1",
+    provider: "outrun",
+    baseUrl: "https://api.outrun.to/v1",
     description: "Sunlight 2.1",
     inputs: [],
   },

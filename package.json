@@ -1,6 +1,6 @@
 {
   "name": "meteor",
-  "version": "0.2.25",
+  "version": "0.2.26",
   "description": "Meteor — AI coding assistant (CLI + Electron app)",
   "type": "module",
   "license": "MIT",

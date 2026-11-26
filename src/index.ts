@@ -4,14 +4,14 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { MODELS, DEFAULT_MODEL, resolveModel, REASONING_EFFORTS, type MeteorModel } from "./models.js";
 import { complete, ZenError, type Message, type ToolDefinition } from "./zen.js";
-import { clearApiKey, loadConfig, loadMcpServers, resolveApiKey, resetConfig, saveConfig, isUsingFreeTier, saveBrowserbaseKey, resolveBrowserbaseKey, resolveModelKey, modelKeyHint, saveTokenRouterKey, saveOrcaRouterKey, saveOpenRouterKey, saveApinexKey, resolveTokenRouterKey, resolveOrcaRouterKey } from "./config.js";
+import { clearApiKey, loadConfig, loadMcpServers, resolveApiKey, resetConfig, saveConfig, isUsingFreeTier, saveBrowserbaseKey, resolveBrowserbaseKey, resolveModelKey, modelKeyHint, saveTokenRouterKey, saveOrcaRouterKey, saveOpenRouterKey, saveApinexKey, saveOutrunKey, resolveTokenRouterKey, resolveOrcaRouterKey } from "./config.js";
 import { checkQuotaOrThrow, getQuotaStatus, recordTokenUsage, formatTimeRemaining, QuotaExceededError } from "./quota.js";
 import { WEB_TOOL_DEFINITIONS, executeWebTool } from "./web.js";
 import { WORKSPACE_TOOL_DEFINITIONS, WORKSPACE_WRITE_TOOLS, WORKSPACE_APPROVAL_TOOLS, executeWorkspaceTool } from "./workspace-tools.js";
 import { writeFileInWorkspace, deleteFileInWorkspace } from "./workspace.js";
 import { listMcpTools, callMcpTool, killAllMcp, setMcpClientVersion } from "./mcp-client.js";
 
-const VERSION = "0.2.25";
+const VERSION = "0.2.26";
 setMcpClientVersion(VERSION);
 
 const DEFAULT_SYSTEM =
@@ -70,8 +70,9 @@ Usage
   meteor plan                     Plan the build — preview without writing files
   meteor models                   List available models
   meteor auth set <api-key>             Store your API key
-  meteor auth set-openrouter <key>     Store OpenRouter API key (all Sunlight models)
-  meteor auth set-apinex <key>         Store Apinex API key (for Sunlight 2.1)
+  meteor auth set-openrouter <key>     Store OpenRouter API key
+  meteor auth set-outrun <key>         Store Outrun API key (for Sunlight 2.1)
+  meteor auth set-apinex <key>         Store Apinex API key
   meteor auth set-tokenrouter <key>     Store TokenRouter API key
   meteor auth set-orcarouter <key>      Store OrcaRouter API key
   meteor auth set-browserbase <bb-key>  Store Browserbase API key (for live web search)
@@ -728,6 +729,12 @@ async function authAction(sub: string | undefined, value: string | undefined): P
       console.log("Apinex key saved to ~/.config/meteor/config.json");
       return;
     }
+    case "set-outrun": {
+      if (!value) throw new Error("Usage: meteor auth set-outrun <outrun-api-key>");
+      saveOutrunKey(value);
+      console.log("Outrun key saved to ~/.config/meteor/config.json");
+      return;
+    }
     case "set-tokenrouter": {
       if (!value) throw new Error("Usage: meteor auth set-tokenrouter <tokenrouter-api-key>");
       saveTokenRouterKey(value);
@@ -756,6 +763,11 @@ async function authAction(sub: string | undefined, value: string | undefined): P
         : loadConfig().apinexKey
           ? "~/.config/meteor/config.json"
           : "not configured (using embedded key)";
+      const outrunSource = process.env.OUTRUN_API_KEY
+        ? "environment (OUTRUN_API_KEY)"
+        : loadConfig().outrunKey
+          ? "~/.config/meteor/config.json"
+          : "not configured (using embedded key)";
       const trSource = process.env.TOKENROUTER_API_KEY
         ? "environment (TOKENROUTER_API_KEY)"
         : loadConfig().tokenrouterKey
@@ -769,6 +781,7 @@ async function authAction(sub: string | undefined, value: string | undefined): P
       const bbSource = resolveBrowserbaseKey() ? "configured" : "not configured (using DuckDuckGo fallback)";
       console.log(`API key source:      ${source}`);
       console.log(`OpenRouter key:      ${orSource}`);
+      console.log(`Outrun key:          ${outrunSource}`);
       console.log(`Apinex key:         ${apSource}`);
       console.log(`TokenRouter key:     ${trSource}`);
       console.log(`OrcaRouter key:      ${orcaSource}`);

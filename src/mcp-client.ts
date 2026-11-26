@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { loadMcpServers, type McpServerConfig } from "./config.js";
 
-let mcpClientVersion = "0.2.25";
+let mcpClientVersion = "0.2.26";
 export function setMcpClientVersion(version: string): void {
   if (version) mcpClientVersion = version;
 }

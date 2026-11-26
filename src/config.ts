@@ -11,6 +11,7 @@ export const EMBEDDED_BROWSERBASE_API_KEY = "bb_live_MXTt6FP2BJ5RKgtOr4gezAvQL2g
 export const EMBEDDED_SUPABASE_URL = "https://ikjugnimawkoatkbvpgk.supabase.co";
 export const EMBEDDED_OPENROUTER_KEY = "";
 export const EMBEDDED_APINEX_KEY = "sk-apx5de7d5f25588669efa5b001e64f08f3808a6f2928b3878a";
+export const EMBEDDED_OUTRUN_KEY = "sk-rs-23R3rvTh6fdTsd6XpzaiFx4sCrY1v_0NBHE8gfGW1-o";
 export const EMBEDDED_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlranVnbmltYXdrb2F0a2J2cGdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNzI3OTAsImV4cCI6MjA5NTY0ODc5MH0.xr9B_khj2zKIEoUsTisL66SGgn8Yo2K0YH5YDw0QmQw";
 
 export interface McpServerConfig {
@@ -34,6 +35,7 @@ export interface MeteorConfig {
   orcarouterKey?: string;
   openrouterKey?: string;
   apinexKey?: string;
+  outrunKey?: string;
   browserbaseApiKey?: string;
   defaultModel?: string;
   mcpServers?: McpServers;
@@ -135,9 +137,19 @@ export function resolveApinexKey(cliKey?: string): string | undefined {
   );
 }
 
+export function resolveOutrunKey(cliKey?: string): string | undefined {
+  return (
+    cliKey ??
+    process.env.OUTRUN_API_KEY ??
+    loadConfig().outrunKey ??
+    (EMBEDDED_OUTRUN_KEY || undefined)
+  );
+}
+
 export function resolveModelKey(provider: string | undefined, cliKey?: string): string | undefined {
   if (provider === "openrouter") return resolveOpenRouterKey(cliKey);
   if (provider === "apinex") return resolveApinexKey(cliKey);
+  if (provider === "outrun") return resolveOutrunKey(cliKey);
   if (provider === "mercury") return resolveMercuryKey(cliKey);
   if (provider === "tokenrouter") return resolveTokenRouterKey(cliKey);
   if (provider === "orcarouter") return resolveOrcaRouterKey(cliKey);
@@ -150,6 +162,8 @@ export function modelKeyHint(provider: string | undefined): string {
       return "Set OPENROUTER_API_KEY, or run: meteor auth set-openrouter <key>";
     case "apinex":
       return "Set APINEX_API_KEY, or run: meteor auth set-apinex <key>";
+    case "outrun":
+      return "Set OUTRUN_API_KEY, or run: meteor auth set-outrun <key>";
     case "mercury":
       return "Set MERCURY_API_KEY, or add mercuryKey to ~/.config/meteor/config.json";
     case "tokenrouter":
@@ -183,6 +197,10 @@ export function saveApinexKey(key: string): void {
   saveConfig({ apinexKey: key });
 }
 
+export function saveOutrunKey(key: string): void {
+  saveConfig({ outrunKey: key });
+}
+
 export function saveTokenRouterKey(key: string): void {
   saveConfig({ tokenrouterKey: key });
 }
@@ -201,6 +219,10 @@ export function isUsingFreeTier(cliKey?: string, provider?: string): boolean {
   if (provider === "apinex") {
     if (process.env.APINEX_API_KEY) return false;
     return !loadConfig().apinexKey;
+  }
+  if (provider === "outrun") {
+    if (process.env.OUTRUN_API_KEY) return false;
+    return !loadConfig().outrunKey;
   }
   if (provider === "mercury") {
     if (process.env.MERCURY_API_KEY) return false;
